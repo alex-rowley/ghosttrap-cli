@@ -43,7 +43,7 @@ The output is JSON with `error.repo`, `error.type`, `error.message`, `error.trac
 
 - Always `run_in_background: true` for peek — it blocks.
 - Don't run multiple peeks at once.
-- If peek exits with code 1, no errors — restart it.
+- If peek exits without output (connection lost), restart it.
 - After installing/updating the SDK, write the state back to config.json.
 """
 
@@ -245,16 +245,9 @@ async def watch(server_url, token):
             await asyncio.sleep(1)
 
 
-async def peek(server_url, token, timeout):
+async def peek(server_url, token):
     config = _load_config()
-
-    try:
-        await asyncio.wait_for(
-            _connect_and_handle(server_url, token, config, once=True),
-            timeout=timeout,
-        )
-    except asyncio.TimeoutError:
-        sys.exit(1)
+    await _connect_and_handle(server_url, token, config, once=True)
 
 
 def main():
@@ -268,7 +261,6 @@ def main():
 
     peek_parser = sub.add_parser("peek", help="Wait for the next error then exit")
     peek_parser.add_argument("--server", default=GHOSTTRAP_SERVER, help="WebSocket server URL")
-    peek_parser.add_argument("--timeout", type=int, default=300, help="Seconds to wait before giving up (exit 1)")
 
     args = parser.parse_args()
 
@@ -282,7 +274,7 @@ def main():
     elif args.command == "peek":
         _require_setup()
         token = get_gh_token()
-        asyncio.run(peek(args.server, token, args.timeout))
+        asyncio.run(peek(args.server, token))
     else:
         parser.print_help()
         sys.exit(1)
