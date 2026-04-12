@@ -19,48 +19,32 @@ SKILL_FILE = os.path.join(SKILL_DIR, "SKILL.md")
 SKILL_CONTENT = """\
 ---
 name: ghosttrap
-description: Production error monitoring via ghosttrap.io. Use this skill when working on any project that has ghosttrap configured. Trigger when you see references to ghosttrap in the codebase, when the user mentions production errors, or proactively when starting work on a configured project.
+description: Production error monitoring via ghosttrap.io. Trigger when starting work on a configured project, when the user mentions production errors, or when you see ghosttrap references in code.
 ---
 
-# Ghosttrap — Production Error Monitor
+# Ghosttrap
 
-Ghosttrap streams production errors from ghosttrap.io to your terminal. When working on a project with ghosttrap configured, you should monitor for errors and fix them.
+Read `~/.ghosttrap/config.json` for state. It contains:
+- `repos`: map of `"owner/repo"` to `{"token": "t_xxx", "sdk_installed": bool, "sdk_version": str, "init_file": str}`
+- `cursor`: last seen error ID
 
-## How it works
+## On session start
 
-The `ghosttrap peek` command connects to ghosttrap.io, waits for the next production error (or replays any missed since your last check), prints it as JSON to stdout, and exits. It blocks until an error arrives or times out after 300 seconds (exit code 1 = no errors).
+1. Detect the current repo from `git config --get remote.origin.url`.
+2. Look it up in the config. If the repo isn't there, tell the user to run `ghosttrap setup`.
+3. If `sdk_installed` is false or missing: install the SDK (`pip install git+https://github.com/arowley-predictive-power/ghosttrap-sdk.git`), add `import ghosttrap; ghosttrap.init("<token>")` to the app startup, add `ghosttrap.report(exc)` in exception handlers. Then update the config: set `sdk_installed: true`, `sdk_version`, `init_file` to record what you did.
+4. Run `ghosttrap peek` with `run_in_background: true`.
 
-## What to do
+## When peek returns
 
-1. **Start peek as a background process** at the beginning of a session:
-   ```
-   ghosttrap peek
-   ```
-   Run this with `run_in_background: true`. You will be notified when it completes.
+The output is JSON with `error.repo`, `error.type`, `error.message`, `error.traceback` (list of strings), `error.frames` (list of `{file, line, function, code}`). Open the file from the last frame, diagnose, fix. Then run `ghosttrap peek` in the background again.
 
-2. **When peek returns output**, read it. The JSON contains:
-   - `error.repo` — which repo the error came from
-   - `error.type` — exception class name (e.g. ValueError)
-   - `error.message` — the exception message
-   - `error.traceback` — full formatted traceback as a list of strings
-   - `error.frames` — structured list of frames, each with `file`, `line`, `function`, `code`
+## Rules
 
-3. **Fix the error.** Open the file from the last frame, read the surrounding code, diagnose the root cause from the traceback, and fix it.
-
-4. **Restart peek** after fixing. Run `ghosttrap peek` in the background again to wait for the next error.
-
-5. **If peek exits with code 1** (timeout, no errors), restart it. There are simply no errors right now.
-
-## Setup check
-
-Ghosttrap is configured if `~/.ghosttrap/config.json` exists. If a user asks about ghosttrap and this file doesn't exist, tell them to run `ghosttrap setup` first.
-
-## Important
-
-- Always run `ghosttrap peek` with `run_in_background: true` — it blocks.
-- Don't run multiple peeks simultaneously.
-- The peek command handles authentication automatically via the local `gh` CLI.
-- Errors are not duplicated — each peek resumes from where the last one left off.
+- Always `run_in_background: true` for peek — it blocks.
+- Don't run multiple peeks at once.
+- If peek exits with code 1, no errors — restart it.
+- After installing/updating the SDK, write the state back to config.json.
 """
 
 
