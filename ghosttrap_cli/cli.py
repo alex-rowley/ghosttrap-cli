@@ -105,54 +105,70 @@ def get_gh_token():
         sys.exit(1)
 
 
-async def watch(server_url, token):
+async def _connect_and_handle(server_url, token, config, once=False):
+    """Core WebSocket loop. If once=True, exit after the first error."""
     url = f"{server_url}?token={token}"
+
+    async with websockets.connect(url) as ws:
+        async for message in ws:
+            event = json.loads(message)
+
+            if event.get("type") == "subscribed":
+                repos = event.get("repos", [])
+                print(f"watching {len(repos)} repo(s)", file=sys.stderr)
+
+                new_repos = [r for r in repos if not _is_known_repo(config, r["owner"], r["name"])]
+                if new_repos:
+                    _save_repos(config, repos)
+                    target = _find_target_repo(new_repos)
+                    if target:
+                        _print_setup_snippet(target)
+
+                if not once:
+                    print(f"waiting for errors...", file=sys.stderr)
+                continue
+
+            if event.get("type") == "error":
+                print(json.dumps(event))
+                sys.stdout.flush()
+
+                if not once:
+                    error = event["error"]
+                    print(f"\n{'='*60}", file=sys.stderr)
+                    print(f"  {error.get('repo', '?')}", file=sys.stderr)
+                    print(f"  {error.get('type', '?')}: {error.get('message', '')}", file=sys.stderr)
+                    frames = error.get("frames", [])
+                    if frames:
+                        f = frames[-1]
+                        print(f"  at {f.get('file', '?')}:{f.get('line', '?')} in {f.get('function', '?')}", file=sys.stderr)
+                    print(f"{'='*60}", file=sys.stderr)
+
+                if once:
+                    return
+
+
+async def watch(server_url, token):
     config = _load_config()
     print(f"connecting to {server_url}...", file=sys.stderr)
 
-    async for ws in websockets.connect(url):
+    while True:
         try:
-            async for message in ws:
-                event = json.loads(message)
-
-                if event.get("type") == "subscribed":
-                    repos = event.get("repos", [])
-                    print(f"\nwatching {len(repos)} repo(s)\n", file=sys.stderr)
-                    for r in repos:
-                        print(f"  {r['owner']}/{r['name']}", file=sys.stderr)
-
-                    new_repos = [r for r in repos if not _is_known_repo(config, r["owner"], r["name"])]
-                    if new_repos:
-                        _save_repos(config, repos)
-                        target = _find_target_repo(new_repos)
-                        if target:
-                            _print_setup_snippet(target)
-
-                    print(f"\nwaiting for errors...\n", file=sys.stderr)
-                    continue
-
-                if event.get("type") == "error":
-                    error = event["error"]
-                    repo = error.get("repo", "?")
-                    etype = error.get("type", "?")
-                    msg = error.get("message", "")
-                    frames = error.get("frames", [])
-                    last_frame = frames[-1] if frames else {}
-                    location = f"{last_frame.get('file', '?')}:{last_frame.get('line', '?')}"
-
-                    print(f"\n{'='*60}", file=sys.stderr)
-                    print(f"  {repo}", file=sys.stderr)
-                    print(f"  {etype}: {msg}", file=sys.stderr)
-                    if last_frame:
-                        print(f"  at {location} in {last_frame.get('function', '?')}", file=sys.stderr)
-                    print(f"{'='*60}", file=sys.stderr)
-
-                    print(json.dumps(event))
-                    sys.stdout.flush()
-
+            await _connect_and_handle(server_url, token, config, once=False)
         except websockets.ConnectionClosed:
             print("connection lost, reconnecting...", file=sys.stderr)
-            continue
+            await asyncio.sleep(1)
+
+
+async def peek(server_url, token, timeout):
+    config = _load_config()
+
+    try:
+        await asyncio.wait_for(
+            _connect_and_handle(server_url, token, config, once=True),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        sys.exit(1)
 
 
 def main():
@@ -162,11 +178,18 @@ def main():
     watch_parser = sub.add_parser("watch", help="Stream errors in real time")
     watch_parser.add_argument("--server", default=GHOSTTRAP_SERVER, help="WebSocket server URL")
 
+    peek_parser = sub.add_parser("peek", help="Wait for the next error then exit")
+    peek_parser.add_argument("--server", default=GHOSTTRAP_SERVER, help="WebSocket server URL")
+    peek_parser.add_argument("--timeout", type=int, default=300, help="Seconds to wait before giving up (exit 1)")
+
     args = parser.parse_args()
 
     if args.command == "watch":
         token = get_gh_token()
         asyncio.run(watch(args.server, token))
+    elif args.command == "peek":
+        token = get_gh_token()
+        asyncio.run(peek(args.server, token, args.timeout))
     else:
         parser.print_help()
         sys.exit(1)
