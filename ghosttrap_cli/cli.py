@@ -107,7 +107,10 @@ def get_gh_token():
 
 async def _connect_and_handle(server_url, token, config, once=False):
     """Core WebSocket loop. If once=True, exit after the first error."""
+    since = config.get("cursor")
     url = f"{server_url}?token={token}"
+    if since is not None:
+        url += f"&since={since}"
 
     async with websockets.connect(url) as ws:
         async for message in ws:
@@ -129,6 +132,11 @@ async def _connect_and_handle(server_url, token, config, once=False):
                 continue
 
             if event.get("type") == "error":
+                error_id = event.get("error", {}).get("id")
+                if error_id is not None:
+                    config["cursor"] = error_id
+                    _save_config(config)
+
                 print(json.dumps(event))
                 sys.stdout.flush()
 
