@@ -13,6 +13,55 @@ import websockets
 GHOSTTRAP_SERVER = "wss://ghosttrap.io/stream/"
 CONFIG_DIR = os.path.expanduser("~/.ghosttrap")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+SKILL_DIR = os.path.expanduser("~/.claude/skills/ghosttrap")
+SKILL_FILE = os.path.join(SKILL_DIR, "SKILL.md")
+
+SKILL_CONTENT = """\
+---
+name: ghosttrap
+description: Production error monitoring via ghosttrap.io. Use this skill when working on any project that has ghosttrap configured. Trigger when you see references to ghosttrap in the codebase, when the user mentions production errors, or proactively when starting work on a configured project.
+---
+
+# Ghosttrap — Production Error Monitor
+
+Ghosttrap streams production errors from ghosttrap.io to your terminal. When working on a project with ghosttrap configured, you should monitor for errors and fix them.
+
+## How it works
+
+The `ghosttrap peek` command connects to ghosttrap.io, waits for the next production error (or replays any missed since your last check), prints it as JSON to stdout, and exits. It blocks until an error arrives or times out after 300 seconds (exit code 1 = no errors).
+
+## What to do
+
+1. **Start peek as a background process** at the beginning of a session:
+   ```
+   ghosttrap peek
+   ```
+   Run this with `run_in_background: true`. You will be notified when it completes.
+
+2. **When peek returns output**, read it. The JSON contains:
+   - `error.repo` — which repo the error came from
+   - `error.type` — exception class name (e.g. ValueError)
+   - `error.message` — the exception message
+   - `error.traceback` — full formatted traceback as a list of strings
+   - `error.frames` — structured list of frames, each with `file`, `line`, `function`, `code`
+
+3. **Fix the error.** Open the file from the last frame, read the surrounding code, diagnose the root cause from the traceback, and fix it.
+
+4. **Restart peek** after fixing. Run `ghosttrap peek` in the background again to wait for the next error.
+
+5. **If peek exits with code 1** (timeout, no errors), restart it. There are simply no errors right now.
+
+## Setup check
+
+Ghosttrap is configured if `~/.ghosttrap/config.json` exists. If a user asks about ghosttrap and this file doesn't exist, tell them to run `ghosttrap setup` first.
+
+## Important
+
+- Always run `ghosttrap peek` with `run_in_background: true` — it blocks.
+- Don't run multiple peeks simultaneously.
+- The peek command handles authentication automatically via the local `gh` CLI.
+- Errors are not duplicated — each peek resumes from where the last one left off.
+"""
 
 
 def _load_config():
@@ -155,6 +204,51 @@ async def _connect_and_handle(server_url, token, config, once=False):
                     return
 
 
+def _require_setup():
+    if not os.path.exists(CONFIG_FILE):
+        print("error: ghosttrap is not set up. run 'ghosttrap setup' first.", file=sys.stderr)
+        sys.exit(1)
+
+
+def _write_skill():
+    os.makedirs(SKILL_DIR, exist_ok=True)
+    with open(SKILL_FILE, "w") as f:
+        f.write(SKILL_CONTENT)
+
+
+async def setup(server_url, token):
+    config = _load_config()
+    print("connecting to ghosttrap.io...", file=sys.stderr)
+
+    try:
+        url = f"{server_url}?token={token}"
+        async with websockets.connect(url) as ws:
+            message = await asyncio.wait_for(ws.recv(), timeout=30)
+            event = json.loads(message)
+
+            if event.get("type") != "subscribed":
+                print("error: unexpected response from server", file=sys.stderr)
+                sys.exit(1)
+
+            repos = event.get("repos", [])
+            _save_repos(config, repos)
+            _write_skill()
+
+            target = _find_target_repo(repos)
+
+            print(f"\nclaimed {len(repos)} repo(s)", file=sys.stderr)
+            print(f"skill file written to {SKILL_FILE}", file=sys.stderr)
+
+            if target:
+                _print_setup_snippet(target)
+
+            print("done — Claude Code will take it from here\n", file=sys.stderr)
+
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 async def watch(server_url, token):
     config = _load_config()
     print(f"connecting to {server_url}...", file=sys.stderr)
@@ -183,6 +277,8 @@ def main():
     parser = argparse.ArgumentParser(prog="ghosttrap", description="Watch for errors from ghosttrap.io")
     sub = parser.add_subparsers(dest="command")
 
+    sub.add_parser("setup", help="Claim repos and install Claude Code skill")
+
     watch_parser = sub.add_parser("watch", help="Stream errors in real time")
     watch_parser.add_argument("--server", default=GHOSTTRAP_SERVER, help="WebSocket server URL")
 
@@ -192,10 +288,15 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "watch":
+    if args.command == "setup":
+        token = get_gh_token()
+        asyncio.run(setup(GHOSTTRAP_SERVER, token))
+    elif args.command == "watch":
+        _require_setup()
         token = get_gh_token()
         asyncio.run(watch(args.server, token))
     elif args.command == "peek":
+        _require_setup()
         token = get_gh_token()
         asyncio.run(peek(args.server, token, args.timeout))
     else:
