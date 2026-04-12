@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ghosttrap-cli"
+version = "0.1.0"
+description = "Watch for errors streaming from ghosttrap.io"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "websockets>=12.0",
+]
+
+[project.scripts]
+ghosttrap = "ghosttrap_cli.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/arowley-predictive-power/ghosttrap-cli"
+
+[tool.setuptools.packages.find]
+include = ["ghosttrap_cli*"]
