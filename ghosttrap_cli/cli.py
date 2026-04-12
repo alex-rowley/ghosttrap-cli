@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import json
+import os
 import subprocess
 import sys
 
@@ -10,6 +11,82 @@ import websockets
 
 
 GHOSTTRAP_SERVER = "wss://ghosttrap.io/stream/"
+CONFIG_DIR = os.path.expanduser("~/.ghosttrap")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+
+
+def _load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE) as f:
+            return json.load(f)
+    return {"repos": {}}
+
+
+def _save_config(config):
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
+
+def _is_known_repo(config, owner, name):
+    return f"{owner}/{name}" in config.get("repos", {})
+
+
+def _save_repos(config, repos):
+    if "repos" not in config:
+        config["repos"] = {}
+    for r in repos:
+        key = f"{r['owner']}/{r['name']}"
+        config["repos"][key] = {"token": r["token"]}
+    _save_config(config)
+
+
+def _detect_repo_from_cwd():
+    try:
+        result = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            capture_output=True, text=True, timeout=5,
+        )
+        url = result.stdout.strip()
+        if not url:
+            return None
+        for prefix in ["git@github.com:", "https://github.com/"]:
+            if url.startswith(prefix):
+                path = url[len(prefix):]
+                if path.endswith(".git"):
+                    path = path[:-4]
+                return path
+        if ":" in url and not url.startswith("http"):
+            path = url.split(":", 1)[1]
+            if path.endswith(".git"):
+                path = path[:-4]
+            return path
+    except Exception:
+        pass
+    return None
+
+
+def _find_target_repo(repos):
+    cwd_slug = _detect_repo_from_cwd()
+    if cwd_slug:
+        for r in repos:
+            if f"{r['owner']}/{r['name']}" == cwd_slug:
+                return r
+    return repos[0] if repos else None
+
+
+def _print_setup_snippet(repo):
+    owner = repo["owner"]
+    name = repo["name"]
+    token = repo["token"]
+
+    print(f"\nadd to your app:\n", file=sys.stderr)
+    print(f"  pip install ghosttrap-sdk\n", file=sys.stderr)
+    print(f"  import ghosttrap\n", file=sys.stderr)
+    print(f"  # option 1: token (recommended)", file=sys.stderr)
+    print(f'  ghosttrap.init("{token}")\n', file=sys.stderr)
+    print(f"  # option 2: repo url", file=sys.stderr)
+    print(f'  ghosttrap.init("https://ghosttrap.io/trap/{owner}/{name}/")\n', file=sys.stderr)
 
 
 def get_gh_token():
@@ -30,6 +107,7 @@ def get_gh_token():
 
 async def watch(server_url, token):
     url = f"{server_url}?token={token}"
+    config = _load_config()
     print(f"connecting to {server_url}...", file=sys.stderr)
 
     async for ws in websockets.connect(url):
@@ -39,9 +117,18 @@ async def watch(server_url, token):
 
                 if event.get("type") == "subscribed":
                     repos = event.get("repos", [])
-                    print(f"watching {len(repos)} repo(s)", file=sys.stderr)
+                    print(f"\nwatching {len(repos)} repo(s)\n", file=sys.stderr)
                     for r in repos:
-                        print(f"  {r}", file=sys.stderr)
+                        print(f"  {r['owner']}/{r['name']}", file=sys.stderr)
+
+                    new_repos = [r for r in repos if not _is_known_repo(config, r["owner"], r["name"])]
+                    if new_repos:
+                        _save_repos(config, repos)
+                        target = _find_target_repo(new_repos)
+                        if target:
+                            _print_setup_snippet(target)
+
+                    print(f"\nwaiting for errors...\n", file=sys.stderr)
                     continue
 
                 if event.get("type") == "error":
@@ -60,7 +147,6 @@ async def watch(server_url, token):
                         print(f"  at {location} in {last_frame.get('function', '?')}", file=sys.stderr)
                     print(f"{'='*60}", file=sys.stderr)
 
-                    # Full event to stdout for piping / Claude Code consumption
                     print(json.dumps(event))
                     sys.stdout.flush()
 
