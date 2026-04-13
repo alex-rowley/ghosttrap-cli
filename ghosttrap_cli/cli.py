@@ -202,10 +202,16 @@ def _write_skill():
 
 async def setup(server_url, token):
     config = _load_config()
-    print("connecting to ghosttrap.io...", file=sys.stderr)
+
+    cwd_repo = _detect_repo_from_cwd()
+    if not cwd_repo:
+        print("error: not in a git repo, or no remote.origin.url configured", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"claiming {cwd_repo}...", file=sys.stderr)
 
     try:
-        url = f"{server_url}?token={token}"
+        url = f"{server_url}?token={token}&repo={cwd_repo}"
         async with websockets.connect(url) as ws:
             message = await asyncio.wait_for(ws.recv(), timeout=30)
             event = json.loads(message)
@@ -218,9 +224,9 @@ async def setup(server_url, token):
             _save_repos(config, repos)
             _write_skill()
 
-            target = _find_target_repo(repos)
+            target = repos[0] if repos else None
 
-            print(f"\nclaimed {len(repos)} repo(s)", file=sys.stderr)
+            print(f"claimed {cwd_repo}", file=sys.stderr)
             print(f"skill file written to {SKILL_FILE}", file=sys.stderr)
 
             if target:
