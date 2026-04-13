@@ -141,7 +141,10 @@ def get_gh_token():
 async def _connect_and_handle(server_url, token, config, once=False):
     """Core WebSocket loop. If once=True, exit after the first error."""
     since = config.get("cursor")
+    cwd_repo = _detect_repo_from_cwd()
     url = f"{server_url}?token={token}"
+    if cwd_repo:
+        url += f"&repo={cwd_repo}"
     if since is not None:
         url += f"&since={since}"
 
