@@ -4,7 +4,7 @@ The developer-side listener for [ghosttrap](https://ghosttrap.io). Connects erro
 
 ## Setup
 
-Requires the [GitHub CLI](https://cli.github.com) (`gh`).
+Requires the [GitHub CLI](https://cli.github.com) (`gh`) and [Claude Code](https://claude.ai/code).
 
 ```
 pip install ghosttrap-cli
@@ -12,7 +12,13 @@ cd ~/your-project
 ghosttrap setup
 ```
 
-That's it. Two commands. `setup` authenticates via `gh`, claims the repo on ghosttrap.io, and installs a Claude Code skill that teaches Claude how to monitor for errors and fix them. Claude Code takes it from here — it handles the SDK integration automatically.
+Then in Claude Code:
+
+```
+/ghosttrap
+```
+
+That's it. `setup` authenticates via `gh`, claims the repo, and installs a Claude Code skill. The `/ghosttrap` skill handles everything else — it installs the SDK into your app, wires in the error hooks, and starts monitoring.
 
 ## What happens next
 
