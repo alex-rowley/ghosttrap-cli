@@ -30,7 +30,7 @@ After fixing, Claude restarts peek and waits for the next one. Errors become a r
 
 ## The SDK
 
-Your app needs [ghosttrap-sdk](https://github.com/arowley-predictive-power/ghosttrap-sdk) to report errors. The Claude Code skill handles the integration automatically — it installs the SDK, wires it into your app, and adds Django/Celery hooks if applicable. You shouldn't need to touch the SDK manually.
+Your app needs [ghosttrap-sdk](https://github.com/alex-rowley/ghosttrap-sdk) to report errors. The Claude Code skill handles the integration automatically — it installs the SDK, wires it into your app, and adds Django/Celery hooks if applicable. You shouldn't need to touch the SDK manually.
 
 ## Commands
 

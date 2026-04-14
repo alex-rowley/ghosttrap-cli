@@ -16,7 +16,7 @@ dependencies = [
 ghosttrap = "ghosttrap_cli.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/arowley-predictive-power/ghosttrap-cli"
+Homepage = "https://github.com/alex-rowley/ghosttrap-cli"
 
 [tool.setuptools.packages.find]
 include = ["ghosttrap_cli*"]

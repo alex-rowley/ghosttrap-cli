@@ -18,7 +18,7 @@ CONFIG_DIR = os.path.expanduser("~/.ghosttrap")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 SKILL_DIR = os.path.expanduser("~/.claude/skills/ghosttrap")
 SKILL_FILE = os.path.join(SKILL_DIR, "SKILL.md")
-GITHUB_CLI_RELEASES = "https://api.github.com/repos/arowley-predictive-power/ghosttrap-cli/releases/latest"
+GITHUB_CLI_RELEASES = "https://api.github.com/repos/alex-rowley/ghosttrap-cli/releases/latest"
 VERSION_CHECK_TTL = 86400  # check once per day
 
 
@@ -58,7 +58,7 @@ Read `~/.ghosttrap/config.json` for state. It contains:
 
 1. Detect the current repo from `git config --get remote.origin.url`.
 2. Look it up in the config. If the repo isn't there, tell the user to run `ghosttrap setup`.
-3. If `sdk_installed` is false or missing: install the SDK (`pip install git+https://github.com/arowley-predictive-power/ghosttrap-sdk.git`), wire `ghosttrap.init("<token>")` into the app startup. For Django projects, also add `"ghosttrap.django.GhostTrapApp"` to INSTALLED_APPS (re-attaches logging handler after Django's dictConfig) and `"ghosttrap.django.GhostTrapMiddleware"` to MIDDLEWARE (catches unhandled view exceptions). The SDK auto-hooks into Celery task_failure if Celery is installed, and attaches a logging handler for logger.exception() calls. Use whatever pattern the project already uses for configuration (env vars, settings files, hardcoded — match the existing style). Then update the config: set `sdk_installed: true`, `sdk_version`, `init_file` to record what you did.
+3. If `sdk_installed` is false or missing: install the SDK (`pip install git+https://github.com/alex-rowley/ghosttrap-sdk.git`), wire `ghosttrap.init("<token>")` into the app startup. For Django projects, also add `"ghosttrap.django.GhostTrapApp"` to INSTALLED_APPS (re-attaches logging handler after Django's dictConfig) and `"ghosttrap.django.GhostTrapMiddleware"` to MIDDLEWARE (catches unhandled view exceptions). The SDK auto-hooks into Celery task_failure if Celery is installed, and attaches a logging handler for logger.exception() calls. Use whatever pattern the project already uses for configuration (env vars, settings files, hardcoded — match the existing style). Then update the config: set `sdk_installed: true`, `sdk_version`, `init_file` to record what you did.
 4. Run `ghosttrap peek` with `run_in_background: true`.
 
 ## When peek returns
@@ -140,7 +140,7 @@ def _print_setup_snippet(repo):
     token = repo["token"]
 
     print(f"\nadd to your app:\n", file=sys.stderr)
-    print(f"  pip install git+https://github.com/arowley-predictive-power/ghosttrap-sdk.git\n", file=sys.stderr)
+    print(f"  pip install git+https://github.com/alex-rowley/ghosttrap-sdk.git\n", file=sys.stderr)
     print(f"  import ghosttrap\n", file=sys.stderr)
     print(f"  # option 1: token (recommended)", file=sys.stderr)
     print(f'  ghosttrap.init("{token}")\n', file=sys.stderr)
