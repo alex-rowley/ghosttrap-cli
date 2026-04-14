@@ -6,15 +6,41 @@ import json
 import os
 import subprocess
 import sys
+import time
+import urllib.request
 
 import websockets
 
+__version__ = "0.3.0"
 
 GHOSTTRAP_SERVER = "wss://ghosttrap.io/stream/"
 CONFIG_DIR = os.path.expanduser("~/.ghosttrap")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 SKILL_DIR = os.path.expanduser("~/.claude/skills/ghosttrap")
 SKILL_FILE = os.path.join(SKILL_DIR, "SKILL.md")
+GITHUB_CLI_RELEASES = "https://api.github.com/repos/arowley-predictive-power/ghosttrap-cli/releases/latest"
+VERSION_CHECK_TTL = 86400  # check once per day
+
+
+def _check_cli_version(config):
+    """Check if a newer CLI version is available. Caches for 24h."""
+    last_check = config.get("cli_version_check", 0)
+    if time.time() - last_check < VERSION_CHECK_TTL:
+        return
+    try:
+        req = urllib.request.Request(GITHUB_CLI_RELEASES, headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "ghosttrap-cli",
+        })
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read())
+            latest = data.get("tag_name", "").lstrip("v")
+            if latest and latest != __version__:
+                print(f"ghosttrap-cli {latest} available (you have {__version__})", file=sys.stderr)
+    except Exception:
+        pass
+    config["cli_version_check"] = time.time()
+    _save_config(config)
 
 SKILL_CONTENT = """\
 ---
@@ -175,6 +201,14 @@ async def _connect_and_handle(server_url, token, config, once=False):
                     if target:
                         _print_setup_snippet(target)
 
+                sdk_latest = event.get("sdk_latest")
+                if sdk_latest:
+                    cwd_repo = _detect_repo_from_cwd()
+                    if cwd_repo and cwd_repo in config.get("repos", {}):
+                        installed = config["repos"][cwd_repo].get("sdk_version")
+                        if installed and installed != sdk_latest:
+                            print(f"ghosttrap-sdk {sdk_latest} available (you have {installed})", file=sys.stderr)
+
                 if not once:
                     print(f"waiting for errors...", file=sys.stderr)
                 continue
@@ -268,6 +302,7 @@ async def watch(server_url, token):
 
 async def peek(server_url, token):
     config = _load_config()
+    _check_cli_version(config)
     await _connect_and_handle(server_url, token, config, once=True)
 
 

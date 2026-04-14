@@ -1,28 +1,28 @@
 # ghosttrap-cli
 
-The developer-side listener for [ghosttrap](https://ghosttrap.io). Connects production errors to Claude Code in real time.
+The developer-side listener for [ghosttrap](https://ghosttrap.io). Connects errors from remote servers to Claude Code in real time.
 
 ## Setup
 
+Requires the [GitHub CLI](https://cli.github.com) (`gh`).
+
 ```
 pip install ghosttrap-cli
-```
-
-Then, from inside your project directory:
-
-```
+cd ~/your-project
 ghosttrap setup
 ```
 
-This authenticates via your local [GitHub CLI](https://cli.github.com) (`gh`), claims the repo on ghosttrap.io, and installs a Claude Code skill file that teaches Claude how to monitor for errors and fix them.
-
-That's the entire setup. Two commands. Claude Code takes it from here.
+That's it. Two commands. `setup` authenticates via `gh`, claims the repo on ghosttrap.io, and installs a Claude Code skill that teaches Claude how to monitor for errors and fix them. Claude Code takes it from here — it handles the SDK integration automatically.
 
 ## What happens next
 
 The skill file tells Claude Code to run `ghosttrap peek` in the background. Peek opens a WebSocket to ghosttrap.io and waits. When a production error arrives, Claude sees the full traceback — exception type, message, file, line, function — and starts fixing.
 
 After fixing, Claude restarts peek and waits for the next one. Errors become a real-time stream that your AI agent dispatches automatically.
+
+## The SDK
+
+Your app needs [ghosttrap-sdk](https://github.com/arowley-predictive-power/ghosttrap-sdk) to report errors. The Claude Code skill handles the integration automatically — it installs the SDK, wires it into your app, and adds Django/Celery hooks if applicable. You shouldn't need to touch the SDK manually.
 
 ## Commands
 
@@ -39,7 +39,6 @@ After fixing, Claude restarts peek and waits for the next one. Errors become a r
 - Errors that arrive while you're offline are replayed on next connect (cursor-based, no duplicates)
 - Local state is stored in `~/.ghosttrap/config.json`
 
-## Links
+## Privacy
 
-- [ghosttrap-sdk](https://github.com/arowley-predictive-power/ghosttrap-sdk) — the SDK you drop into your Python app to report errors
-- [ghosttrap.io](https://ghosttrap.io) — the server that routes errors from your app to your agent
+Error data (tracebacks, exception messages, file paths) is routed through ghosttrap.io. The server is not open source yet — if there's demand for self-hosting, we'll open it up. Your GitHub token is used only during `setup` to verify repo ownership; it's never stored on the server. Peek and watch authenticate with a repo-specific token that can only write errors, not read them or access your GitHub account.
