@@ -138,13 +138,23 @@ def get_gh_token():
         sys.exit(1)
 
 
+def _get_repo_token(config):
+    """Get the repo token for the current directory from config."""
+    cwd_repo = _detect_repo_from_cwd()
+    if cwd_repo and cwd_repo in config.get("repos", {}):
+        return config["repos"][cwd_repo]["token"]
+    # Fall back to first repo in config
+    repos = config.get("repos", {})
+    if repos:
+        return next(iter(repos.values()))["token"]
+    print("error: no repos configured. run 'ghosttrap setup' first.", file=sys.stderr)
+    sys.exit(1)
+
+
 async def _connect_and_handle(server_url, token, config, once=False):
     """Core WebSocket loop. If once=True, exit after the first error."""
     since = config.get("cursor")
-    cwd_repo = _detect_repo_from_cwd()
     url = f"{server_url}?token={token}"
-    if cwd_repo:
-        url += f"&repo={cwd_repo}"
     if since is not None:
         url += f"&since={since}"
 
@@ -278,11 +288,13 @@ def main():
         asyncio.run(setup(GHOSTTRAP_SERVER, token))
     elif args.command == "watch":
         _require_setup()
-        token = get_gh_token()
+        config = _load_config()
+        token = _get_repo_token(config)
         asyncio.run(watch(args.server, token))
     elif args.command == "peek":
         _require_setup()
-        token = get_gh_token()
+        config = _load_config()
+        token = _get_repo_token(config)
         asyncio.run(peek(args.server, token))
     else:
         parser.print_help()
