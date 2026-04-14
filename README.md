@@ -47,4 +47,4 @@ Your app needs [ghosttrap-sdk](https://github.com/arowley-predictive-power/ghost
 
 ## Privacy
 
-Error data (tracebacks, exception messages, file paths) is routed through ghosttrap.io. The server is not open source yet — if there's demand for self-hosting, we'll open it up. Your GitHub token is used only during `setup` to verify repo ownership; it's never stored on the server. Peek and watch authenticate with a repo-specific token that can only write errors, not read them or access your GitHub account.
+Error data (tracebacks, exception messages, file paths) is routed through ghosttrap.io. The server is not open source yet — if there's demand for self-hosting, we'll open it up. Your GitHub token is used only during `setup` to verify repo ownership; it's never stored on the server. After setup, all communication uses a repo-specific token that grants access only to that repo's error stream — it cannot access your GitHub account.
