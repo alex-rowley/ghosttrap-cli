@@ -63,7 +63,9 @@ Read `~/.ghosttrap/config.json` for state. It contains:
 
 ## When peek returns
 
-The output is JSON with `error.repo`, `error.type`, `error.message`, `error.traceback` (list of strings), `error.frames` (list of `{file, line, function, code}`). Open the file from the last frame, diagnose, fix. Then run `ghosttrap peek` in the background again.
+1. **Immediately restart peek** in the background before doing anything else — this ensures you're listening for the next error while you work on the current one.
+2. Read the JSON output: `error.repo`, `error.type`, `error.message`, `error.traceback` (list of strings), `error.frames` (list of `{file, line, function, code}`).
+3. Open the file from the last frame, diagnose, fix.
 
 ## Rules
 
