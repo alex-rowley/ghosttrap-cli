@@ -318,16 +318,21 @@ def clear():
     _require_setup()
     config = _load_config()
     token = _get_repo_token(config)
+    since = config.get("cursor", 0)
     server = GHOSTTRAP_SERVER.replace("wss://", "https://").replace("/stream/", "")
-    url = f"{server}/latest/{token}/"
+    url = f"{server}/latest/{token}/?since={since}"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "ghosttrap-cli"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
             latest_id = data.get("latest_id", 0)
+            pending = data.get("pending", 0)
             config["cursor"] = latest_id
             _save_config(config)
-            print(f"cleared — cursor set to {latest_id}", file=sys.stderr)
+            if pending:
+                print(f"cleared {pending} error(s)", file=sys.stderr)
+            else:
+                print(f"nothing to clear", file=sys.stderr)
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
