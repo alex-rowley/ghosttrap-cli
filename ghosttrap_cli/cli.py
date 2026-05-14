@@ -314,11 +314,31 @@ async def peek(server_url, token):
             await asyncio.sleep(60)
 
 
+def clear():
+    _require_setup()
+    config = _load_config()
+    token = _get_repo_token(config)
+    server = GHOSTTRAP_SERVER.replace("wss://", "https://").replace("/stream/", "")
+    url = f"{server}/latest/{token}/"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ghosttrap-cli"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            latest_id = data.get("latest_id", 0)
+            config["cursor"] = latest_id
+            _save_config(config)
+            print(f"cleared — cursor set to {latest_id}", file=sys.stderr)
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(prog="ghosttrap", description="Watch for errors from ghosttrap.io")
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("setup", help="Claim repos and install Claude Code skill")
+    sub.add_parser("clear", help="Skip all outstanding errors")
 
     watch_parser = sub.add_parser("watch", help="Stream errors in real time")
     watch_parser.add_argument("--server", default=GHOSTTRAP_SERVER, help="WebSocket server URL")
@@ -331,6 +351,8 @@ def main():
     if args.command == "setup":
         token = get_gh_token()
         asyncio.run(setup(GHOSTTRAP_SERVER, token))
+    elif args.command == "clear":
+        clear()
     elif args.command == "watch":
         _require_setup()
         config = _load_config()
