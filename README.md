@@ -38,7 +38,9 @@ Your app needs [ghosttrap-sdk](https://github.com/alex-rowley/ghosttrap-sdk) to 
 |---------|-------------|
 | `ghosttrap setup` | Claim a repo, install the Claude Code skill |
 | `ghosttrap peek` | Wait for the next error, print it, exit |
+| `ghosttrap peek --clear` | Skip outstanding errors, then wait for the next one |
 | `ghosttrap watch` | Stream all errors continuously |
+| `ghosttrap clear` | Skip all outstanding errors |
 
 ## How it works
 
