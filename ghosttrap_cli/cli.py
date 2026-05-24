@@ -59,13 +59,17 @@ Read `~/.ghosttrap/config.json` for state. It contains:
 1. Detect the current repo from `git config --get remote.origin.url`.
 2. Look it up in the config. If the repo isn't there, tell the user to run `ghosttrap setup`.
 3. If `sdk_installed` is false or missing: install the SDK (`pip install ghosttrap-sdk`), wire `ghosttrap.init("<token>")` into the app startup. For Django projects, also add `"ghosttrap.django.GhostTrapApp"` to INSTALLED_APPS (re-attaches logging handler after Django's dictConfig) and `"ghosttrap.django.GhostTrapMiddleware"` to MIDDLEWARE (catches unhandled view exceptions). The SDK auto-hooks into Celery task_failure if Celery is installed, and attaches a logging handler for logger.exception() calls. Use whatever pattern the project already uses for configuration (env vars, settings files, hardcoded — match the existing style). Then update the config: set `sdk_installed: true`, `sdk_version`, `init_file` to record what you did.
-4. Run `ghosttrap peek` with `run_in_background: true`.
+4. Run `ghosttrap peek --clear` with `run_in_background: true`. The `--clear` flag skips any stale backlog from prior sessions so you only get fresh errors.
 
 ## When peek returns
 
-1. **Immediately restart peek** in the background before doing anything else — this ensures you're listening for the next error while you work on the current one.
+1. **Immediately restart peek** in the background before doing anything else — this ensures you're listening for the next error while you work on the current one. Use plain `ghosttrap peek` here (no `--clear`) — you only want to skip backlog at session start.
 2. Read the JSON output: `error.repo`, `error.type`, `error.message`, `error.traceback` (list of strings), `error.frames` (list of `{file, line, function, code}`).
 3. Open the file from the last frame, diagnose, fix.
+
+## Other commands
+
+- `ghosttrap clear` — manually skip outstanding errors without waiting. Useful if the user explicitly wants to drop the queue.
 
 ## Rules
 
@@ -251,6 +255,15 @@ def _write_skill():
         f.write(SKILL_CONTENT)
 
 
+def _refresh_skill_if_stale():
+    if not os.path.exists(SKILL_FILE):
+        return
+    with open(SKILL_FILE) as f:
+        if f.read() != SKILL_CONTENT:
+            _write_skill()
+            print("ghosttrap skill file updated", file=sys.stderr)
+
+
 async def setup(server_url, token):
     config = _load_config()
 
@@ -366,11 +379,13 @@ def main():
         clear()
     elif args.command == "watch":
         _require_setup()
+        _refresh_skill_if_stale()
         config = _load_config()
         token = _get_repo_token(config)
         asyncio.run(watch(args.server, token))
     elif args.command == "peek":
         _require_setup()
+        _refresh_skill_if_stale()
         config = _load_config()
         token = _get_repo_token(config)
         if args.clear:
