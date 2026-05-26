@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import subprocess
@@ -10,6 +11,13 @@ import time
 import urllib.request
 
 import websockets
+
+KNOWN_SKILL_HASHES = {
+    "aeda67bc5971bd8af4d7ebe819ebcce5acead562fa618227a1798b4b5ae7143e",  # v0.2.0
+    "0f2d2f4105e393fc69084d404d5a8154ba5d97fd23f92810c51345e3dc68e9a0",  # v0.3.0
+    "8564b65b8ab5c63283cda1706e30ca62bc4e111d33ba8918220f4b556ad01da1",  # v0.3.1..v0.3.3
+    "5759b2e0dc8ca47c3801915fd688cc8da878a7ab8d405f5183ffd7e8c8df4c55",  # v0.3.4..v0.3.7
+}
 
 __version__ = "0.3.0"
 
@@ -259,9 +267,12 @@ def _refresh_skill_if_stale():
     if not os.path.exists(SKILL_FILE):
         return
     with open(SKILL_FILE) as f:
-        if f.read() != SKILL_CONTENT:
-            _write_skill()
-            print("ghosttrap skill file updated", file=sys.stderr)
+        content = f.read()
+    if content == SKILL_CONTENT:
+        return
+    if hashlib.sha256(content.encode()).hexdigest() in KNOWN_SKILL_HASHES:
+        _write_skill()
+        print("ghosttrap skill file updated", file=sys.stderr)
 
 
 async def setup(server_url, token):
