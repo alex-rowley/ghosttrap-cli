@@ -77,6 +77,7 @@ Read `~/.ghosttrap/config.json` for state. It contains:
 
 ## Other commands
 
+- `ghosttrap last` — fetch the single most recent error and exit immediately, no waiting. Useful when the user wants to look at the latest error without starting a watch. Add `--clear` to also skip everything older in one shot.
 - `ghosttrap clear` — manually skip outstanding errors without waiting. Useful if the user explicitly wants to drop the queue.
 
 ## Rules
@@ -367,6 +368,46 @@ def clear():
         sys.exit(1)
 
 
+def last(do_clear=False):
+    _require_setup()
+    config = _load_config()
+    _check_cli_version(config)
+    token = _get_repo_token(config)
+    server = GHOSTTRAP_SERVER.replace("wss://", "https://").replace("/stream/", "")
+    url = f"{server}/last/{token}/"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ghosttrap-cli"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    error = data.get("error")
+    if not error:
+        print("no errors yet", file=sys.stderr)
+        return
+
+    print(json.dumps({"type": "error", "error": error}))
+    sys.stdout.flush()
+
+    print(f"\n{'='*60}", file=sys.stderr)
+    print(f"  {error.get('repo', '?')}", file=sys.stderr)
+    print(f"  {error.get('type', '?')}: {error.get('message', '')}", file=sys.stderr)
+    frames = error.get("frames", [])
+    if frames:
+        f = frames[-1]
+        print(f"  at {f.get('file', '?')}:{f.get('line', '?')} in {f.get('function', '?')}", file=sys.stderr)
+    print(f"{'='*60}", file=sys.stderr)
+
+    if do_clear:
+        try:
+            _advance_cursor(config, token)
+        except Exception as e:
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(prog="ghosttrap", description="Watch for errors from ghosttrap.io")
     sub = parser.add_subparsers(dest="command")
@@ -380,6 +421,9 @@ def main():
     peek_parser = sub.add_parser("peek", help="Wait for the next error then exit")
     peek_parser.add_argument("--server", default=GHOSTTRAP_SERVER, help="WebSocket server URL")
     peek_parser.add_argument("--clear", action="store_true", help="Skip outstanding errors before waiting")
+
+    last_parser = sub.add_parser("last", help="Fetch the most recent error then exit")
+    last_parser.add_argument("--clear", action="store_true", help="Also skip remaining outstanding errors")
 
     args = parser.parse_args()
 
@@ -406,6 +450,9 @@ def main():
                 print(f"error: {e}", file=sys.stderr)
                 sys.exit(1)
         asyncio.run(peek(args.server, token))
+    elif args.command == "last":
+        _refresh_skill_if_stale()
+        last(do_clear=args.clear)
     else:
         parser.print_help()
         sys.exit(1)
