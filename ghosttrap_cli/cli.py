@@ -82,6 +82,7 @@ Read `~/.ghosttrap/config.json` for state. It contains:
 
 - `ghosttrap last` — fetch the single most recent error and exit immediately, no waiting. Useful when the user wants to look at the latest error without starting a watch. Add `--clear` to also skip everything older in one shot.
 - `ghosttrap clear` — manually skip outstanding errors without waiting. Useful if the user explicitly wants to drop the queue.
+- `ghosttrap nuke` — permanently delete every server-side row for the current repo (errors + the Repo row + its token). Requires the user to type the repo name `owner/name` to confirm. Only run if the user explicitly asks to wipe server data — never proactively. After it succeeds the token is dead; the user would need to `ghosttrap setup` again to use this repo.
 
 ## Rules
 
@@ -390,6 +391,59 @@ def clear():
         sys.exit(1)
 
 
+def nuke():
+    _require_setup()
+    config = _load_config()
+    repos = config.get("repos", {})
+    cwd_repo = _detect_repo_from_cwd()
+    if not cwd_repo:
+        print("error: not in a git repo with a github remote", file=sys.stderr)
+        sys.exit(1)
+
+    entry_key = None
+    entry = None
+    for k, e in repos.items():
+        if f"{e.get('owner')}/{e.get('name')}" == cwd_repo:
+            entry_key, entry = k, e
+            break
+    if entry is None:
+        print(f"error: {cwd_repo} is not in your config. run 'ghosttrap setup' to claim it first.", file=sys.stderr)
+        sys.exit(1)
+
+    canonical = f"{entry['owner']}/{entry['name']}"
+    print(f"\nthis will permanently delete ALL data on the server for {canonical}:", file=sys.stderr)
+    print(f"  - every Error row for this repo", file=sys.stderr)
+    print(f"  - the Repo row itself (token will stop working)", file=sys.stderr)
+    print(f"\ntype the repo name to confirm: ", file=sys.stderr, end="")
+    sys.stderr.flush()
+    try:
+        typed = input().strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\naborted", file=sys.stderr)
+        sys.exit(1)
+    if typed != canonical:
+        print("aborted (did not match)", file=sys.stderr)
+        sys.exit(1)
+
+    server = GHOSTTRAP_SERVER.replace("wss://", "https://").replace("/stream/", "")
+    url = f"{server}/nuke/{entry['token']}/"
+    try:
+        req = urllib.request.Request(url, method="DELETE", headers={"User-Agent": "ghosttrap-cli"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(json.dumps(data))
+    print(f"\nnuked {data.get('repo')}:", file=sys.stderr)
+    print(f"  errors deleted: {data.get('errors_deleted')}", file=sys.stderr)
+    print(f"  repos deleted:  {data.get('repo_deleted')}", file=sys.stderr)
+
+    repos.pop(entry_key, None)
+    _save_config(config)
+
+
 def last(do_clear=False):
     _require_setup()
     config = _load_config()
@@ -447,6 +501,8 @@ def main():
     last_parser = sub.add_parser("last", help="Fetch the most recent error then exit")
     last_parser.add_argument("--clear", action="store_true", help="Also skip remaining outstanding errors")
 
+    sub.add_parser("nuke", help="Permanently delete all server data for the current repo")
+
     args = parser.parse_args()
 
     if args.command == "setup":
@@ -475,6 +531,8 @@ def main():
     elif args.command == "last":
         _refresh_skill_if_stale()
         last(do_clear=args.clear)
+    elif args.command == "nuke":
+        nuke()
     else:
         parser.print_help()
         sys.exit(1)

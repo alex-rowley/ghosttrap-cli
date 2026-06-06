@@ -43,6 +43,7 @@ Your app needs [ghosttrap-sdk](https://github.com/alex-rowley/ghosttrap-sdk) to 
 | `ghosttrap last --clear` | Fetch the most recent error and skip everything older |
 | `ghosttrap watch` | Stream all errors continuously |
 | `ghosttrap clear` | Skip all outstanding errors |
+| `ghosttrap nuke` | Permanently delete every server-side row for the current repo (errors + token). Requires typed confirmation. |
 
 ## How it works
 
