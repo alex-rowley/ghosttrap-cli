@@ -61,7 +61,7 @@ description: Production error monitoring via ghosttrap.io. Trigger when starting
 # Ghosttrap
 
 Read `~/.ghosttrap/config.json` for state. It contains:
-- `repos`: map keyed by GitHub repo id (stringified int) to `{"github_id": int, "owner": str, "name": str, "token": "t_xxx", "sdk_installed": bool, "sdk_version": str, "init_file": str}`. Older configs may still be keyed by `"owner/name"` — same shape inside.
+- `repos`: map keyed by GitHub repo id (stringified int) to `{"github_id": int, "owner": str, "name": str, "token": "t_xxx", "sdk_installed": bool, "sdk_version": str, "init_file": str}`.
 - `cursor`: last seen error ID
 
 ## On session start
@@ -121,11 +121,6 @@ def _save_repos(config, repos):
     for r in repos:
         key = _repo_key(r)
         existing = config["repos"].get(key, {})
-        # Drop any legacy slug-keyed entry now superseded by a github_id key.
-        if r.get("github_id") is not None:
-            legacy_key = f"{r.get('owner')}/{r.get('name')}"
-            if legacy_key in config["repos"] and legacy_key != key:
-                existing = {**config["repos"].pop(legacy_key), **existing}
         existing.update({
             "github_id": r.get("github_id"),
             "owner": r["owner"],
@@ -210,8 +205,6 @@ def _get_repo_token(config):
         for entry in repos.values():
             if f"{entry.get('owner')}/{entry.get('name')}" == cwd_repo:
                 return entry["token"]
-        if cwd_repo in repos:
-            return repos[cwd_repo]["token"]
     if repos:
         return next(iter(repos.values()))["token"]
     print("error: no repos configured. run 'ghosttrap setup' first.", file=sys.stderr)
