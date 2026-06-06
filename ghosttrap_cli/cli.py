@@ -225,6 +225,10 @@ async def _connect_and_handle(server_url, token, config, once=False):
         async for message in ws:
             event = json.loads(message)
 
+            if event.get("type") == "rejected":
+                print(f"error: {event.get('message', event.get('code', 'rejected by server'))}", file=sys.stderr)
+                sys.exit(1)
+
             if event.get("type") == "subscribed":
                 repos = event.get("repos", [])
                 print(f"watching {len(repos)} repo(s)", file=sys.stderr)
@@ -316,8 +320,12 @@ async def setup(server_url, token):
             message = await asyncio.wait_for(ws.recv(), timeout=30)
             event = json.loads(message)
 
+            if event.get("type") == "rejected":
+                print(f"error: {event.get('message', event.get('code', 'rejected by server'))}", file=sys.stderr)
+                sys.exit(1)
+
             if event.get("type") != "subscribed":
-                print("error: unexpected response from server", file=sys.stderr)
+                print(f"error: unexpected response from server: {event}", file=sys.stderr)
                 sys.exit(1)
 
             repos = event.get("repos", [])
@@ -334,6 +342,8 @@ async def setup(server_url, token):
 
             print("done — Claude Code will take it from here\n", file=sys.stderr)
 
+    except SystemExit:
+        raise
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
