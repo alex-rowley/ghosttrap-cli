@@ -20,7 +20,7 @@ KNOWN_SKILL_HASHES = {
     "0651bb4247cf5c68960ff5b63d6a5d0c85ff1ce08e7966ab4823601ff02cf1f4",  # v0.3.9
 }
 
-__version__ = "0.3.0"
+__version__ = "0.3.10"
 
 GHOSTTRAP_SERVER = "wss://ghosttrap.io/stream/"
 CONFIG_DIR = os.path.expanduser("~/.ghosttrap")
@@ -60,13 +60,13 @@ description: Production error monitoring via ghosttrap.io. Trigger when starting
 # Ghosttrap
 
 Read `~/.ghosttrap/config.json` for state. It contains:
-- `repos`: map of `"owner/repo"` to `{"token": "t_xxx", "sdk_installed": bool, "sdk_version": str, "init_file": str}`
+- `repos`: map keyed by GitHub repo id (stringified int) to `{"github_id": int, "owner": str, "name": str, "token": "t_xxx", "sdk_installed": bool, "sdk_version": str, "init_file": str}`. Older configs may still be keyed by `"owner/name"` — same shape inside.
 - `cursor`: last seen error ID
 
 ## On session start
 
-1. Detect the current repo from `git config --get remote.origin.url`.
-2. Look it up in the config. If the repo isn't there, tell the user to run `ghosttrap setup`.
+1. Detect the current repo from `git config --get remote.origin.url` (returns `owner/name`).
+2. Find a matching entry in config by looking for one whose `owner`/`name` equals the detected slug. If no match, tell the user to run `ghosttrap setup`. (The owner/name on a config entry auto-refreshes from the server when the repo is renamed or transferred, so always match against the entry's stored owner/name, not the config key.)
 3. If `sdk_installed` is false or missing: install the SDK (`pip install ghosttrap-sdk`), wire `ghosttrap.init("<token>")` into the app startup. For Django projects, also add `"ghosttrap.django.GhostTrapApp"` to INSTALLED_APPS (re-attaches logging handler after Django's dictConfig) and `"ghosttrap.django.GhostTrapMiddleware"` to MIDDLEWARE (catches unhandled view exceptions). The SDK auto-hooks into Celery task_failure if Celery is installed, and attaches a logging handler for logger.exception() calls. Use whatever pattern the project already uses for configuration (env vars, settings files, hardcoded — match the existing style). Then update the config: set `sdk_installed: true`, `sdk_version`, `init_file` to record what you did.
 4. Run `ghosttrap peek --clear` with `run_in_background: true`. The `--clear` flag skips any stale backlog from prior sessions so you only get fresh errors.
 
@@ -103,16 +103,35 @@ def _save_config(config):
         json.dump(config, f, indent=2)
 
 
-def _is_known_repo(config, owner, name):
-    return f"{owner}/{name}" in config.get("repos", {})
+def _repo_key(r):
+    gid = r.get("github_id")
+    if gid is not None:
+        return str(gid)
+    return f"{r.get('owner')}/{r.get('name')}"
+
+
+def _is_known_repo(config, repo_entry):
+    return _repo_key(repo_entry) in config.get("repos", {})
 
 
 def _save_repos(config, repos):
     if "repos" not in config:
         config["repos"] = {}
     for r in repos:
-        key = f"{r['owner']}/{r['name']}"
-        config["repos"][key] = {"token": r["token"]}
+        key = _repo_key(r)
+        existing = config["repos"].get(key, {})
+        # Drop any legacy slug-keyed entry now superseded by a github_id key.
+        if r.get("github_id") is not None:
+            legacy_key = f"{r.get('owner')}/{r.get('name')}"
+            if legacy_key in config["repos"] and legacy_key != key:
+                existing = {**config["repos"].pop(legacy_key), **existing}
+        existing.update({
+            "github_id": r.get("github_id"),
+            "owner": r["owner"],
+            "name": r["name"],
+            "token": r["token"],
+        })
+        config["repos"][key] = existing
     _save_config(config)
 
 
@@ -145,7 +164,7 @@ def _find_target_repo(repos):
     cwd_slug = _detect_repo_from_cwd()
     if cwd_slug:
         for r in repos:
-            if f"{r['owner']}/{r['name']}" == cwd_slug:
+            if f"{r.get('owner')}/{r.get('name')}" == cwd_slug:
                 return r
     return repos[0] if repos else None
 
@@ -184,11 +203,14 @@ def get_gh_token():
 
 def _get_repo_token(config):
     """Get the repo token for the current directory from config."""
-    cwd_repo = _detect_repo_from_cwd()
-    if cwd_repo and cwd_repo in config.get("repos", {}):
-        return config["repos"][cwd_repo]["token"]
-    # Fall back to first repo in config
     repos = config.get("repos", {})
+    cwd_repo = _detect_repo_from_cwd()
+    if cwd_repo:
+        for entry in repos.values():
+            if f"{entry.get('owner')}/{entry.get('name')}" == cwd_repo:
+                return entry["token"]
+        if cwd_repo in repos:
+            return repos[cwd_repo]["token"]
     if repos:
         return next(iter(repos.values()))["token"]
     print("error: no repos configured. run 'ghosttrap setup' first.", file=sys.stderr)
@@ -210,9 +232,10 @@ async def _connect_and_handle(server_url, token, config, once=False):
                 repos = event.get("repos", [])
                 print(f"watching {len(repos)} repo(s)", file=sys.stderr)
 
-                new_repos = [r for r in repos if not _is_known_repo(config, r["owner"], r["name"])]
+                new_repos = [r for r in repos if not _is_known_repo(config, r)]
+                # Always sync — picks up renamed/transferred repos by github_id.
+                _save_repos(config, repos)
                 if new_repos:
-                    _save_repos(config, repos)
                     target = _find_target_repo(new_repos)
                     if target:
                         _print_setup_snippet(target)
@@ -220,10 +243,13 @@ async def _connect_and_handle(server_url, token, config, once=False):
                 sdk_latest = event.get("sdk_latest")
                 if sdk_latest:
                     cwd_repo = _detect_repo_from_cwd()
-                    if cwd_repo and cwd_repo in config.get("repos", {}):
-                        installed = config["repos"][cwd_repo].get("sdk_version")
-                        if installed and installed != sdk_latest:
-                            print(f"ghosttrap-sdk {sdk_latest} available (you have {installed})", file=sys.stderr)
+                    if cwd_repo:
+                        for entry in config.get("repos", {}).values():
+                            if f"{entry.get('owner')}/{entry.get('name')}" == cwd_repo:
+                                installed = entry.get("sdk_version")
+                                if installed and installed != sdk_latest:
+                                    print(f"ghosttrap-sdk {sdk_latest} available (you have {installed})", file=sys.stderr)
+                                break
 
                 if not once:
                     print(f"waiting for errors...", file=sys.stderr)
