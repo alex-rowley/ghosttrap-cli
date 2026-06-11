@@ -47,10 +47,11 @@ Your app needs [ghosttrap-sdk](https://github.com/alex-rowley/ghosttrap-sdk) to 
 
 ## How it works
 
-- **Setup** authenticates with GitHub to prove you own the repo, then saves a token locally
+- **Setup** authenticates with GitHub (via the active `gh` account) to prove you have access to the repo, then saves a repo token locally. If your active `gh` account can't see the repo, setup fails with a clear message; switch with `gh auth switch` and retry.
 - **Peek** and **watch** connect to ghosttrap.io using that token — no GitHub auth needed after setup
 - Errors that arrive while you're offline are replayed on next connect (cursor-based, no duplicates)
-- Local state is stored in `~/.ghosttrap/config.json`
+- Repos are tracked by GitHub's immutable repo id, so a rename or transfer doesn't require any action — the next connect picks up the new `owner/name` and your token keeps working
+- Local state is stored in `~/.ghosttrap/config.json`, keyed by GitHub repo id
 
 ## Requirements
 
@@ -61,4 +62,8 @@ Your app needs [ghosttrap-sdk](https://github.com/alex-rowley/ghosttrap-sdk) to 
 
 ## Privacy
 
-Error data (tracebacks, exception messages, file paths) is routed through ghosttrap.io. The server is not open source yet — if there's demand for self-hosting, we'll open it up. Your GitHub token is used only during `setup` to verify repo ownership; it's never stored on the server. After setup, all communication uses a repo-specific token that grants access only to that repo's error stream — it cannot access your GitHub account.
+Error data (tracebacks, exception messages, file paths) is routed through ghosttrap.io. The server is not open source yet — if there's demand for self-hosting, we'll open it up. Your GitHub token is used only during `setup` to verify repo access; it's never stored on the server. After setup, all communication uses a repo-specific token that grants access only to that repo's error stream — it cannot access your GitHub account.
+
+User context (Django user id + username) is **never** sent unless you opt in with `ghosttrap.init(token, send_user=True)` in your app. Server hostname is captured automatically.
+
+Run `ghosttrap nuke` from inside a repo to permanently delete every server-side row for that repo (errors + the token itself). Requires typing the repo name to confirm.
