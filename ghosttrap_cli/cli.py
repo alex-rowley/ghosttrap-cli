@@ -201,18 +201,26 @@ def get_gh_token():
         sys.exit(1)
 
 
-def _get_repo_token(config):
-    """Get the repo token for the current directory from config."""
+def _get_repo_token(config, requested=None):
+    """Get the repo token. If `requested` is 'owner/name', match strictly. Else cwd, else first."""
     repos = config.get("repos", {})
+    if not repos:
+        print("error: no repos configured. run 'ghosttrap setup' first.", file=sys.stderr)
+        sys.exit(1)
+    if requested:
+        for entry in repos.values():
+            if f"{entry.get('owner')}/{entry.get('name')}" == requested:
+                return entry["token"]
+        available = sorted(f"{e['owner']}/{e['name']}" for e in repos.values())
+        print(f"error: '{requested}' is not in your config.", file=sys.stderr)
+        print(f"available: {', '.join(available)}", file=sys.stderr)
+        sys.exit(1)
     cwd_repo = _detect_repo_from_cwd()
     if cwd_repo:
         for entry in repos.values():
             if f"{entry.get('owner')}/{entry.get('name')}" == cwd_repo:
                 return entry["token"]
-    if repos:
-        return next(iter(repos.values()))["token"]
-    print("error: no repos configured. run 'ghosttrap setup' first.", file=sys.stderr)
-    sys.exit(1)
+    return next(iter(repos.values()))["token"]
 
 
 async def _connect_and_handle(server_url, token, config, once=False):
@@ -388,10 +396,10 @@ def _advance_cursor(config, token):
         return pending
 
 
-def clear():
+def clear(requested=None):
     _require_setup()
     config = _load_config()
-    token = _get_repo_token(config)
+    token = _get_repo_token(config, requested)
     try:
         pending = _advance_cursor(config, token)
         if pending:
@@ -456,11 +464,11 @@ def nuke():
     _save_config(config)
 
 
-def last(do_clear=False):
+def last(do_clear=False, requested=None):
     _require_setup()
     config = _load_config()
     _check_cli_version(config)
-    token = _get_repo_token(config)
+    token = _get_repo_token(config, requested)
     server = GHOSTTRAP_SERVER.replace("wss://", "https://").replace("/stream/", "")
     url = f"{server}/last/{token}/"
     try:
@@ -501,17 +509,22 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("setup", help="Claim repos and install Claude Code skill")
-    sub.add_parser("clear", help="Skip all outstanding errors")
+
+    clear_parser = sub.add_parser("clear", help="Skip all outstanding errors")
+    clear_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
 
     watch_parser = sub.add_parser("watch", help="Stream errors in real time")
     watch_parser.add_argument("--server", default=GHOSTTRAP_SERVER, help="WebSocket server URL")
+    watch_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
 
     peek_parser = sub.add_parser("peek", help="Wait for the next error then exit")
     peek_parser.add_argument("--server", default=GHOSTTRAP_SERVER, help="WebSocket server URL")
     peek_parser.add_argument("--clear", action="store_true", help="Skip outstanding errors before waiting")
+    peek_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
 
     last_parser = sub.add_parser("last", help="Fetch the most recent error then exit")
     last_parser.add_argument("--clear", action="store_true", help="Also skip remaining outstanding errors")
+    last_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
 
     sub.add_parser("nuke", help="Permanently delete all server data for the current repo")
 
@@ -521,18 +534,18 @@ def main():
         token = get_gh_token()
         asyncio.run(setup(GHOSTTRAP_SERVER, token))
     elif args.command == "clear":
-        clear()
+        clear(requested=args.repo)
     elif args.command == "watch":
         _require_setup()
         _refresh_skill_if_stale()
         config = _load_config()
-        token = _get_repo_token(config)
+        token = _get_repo_token(config, args.repo)
         asyncio.run(watch(args.server, token))
     elif args.command == "peek":
         _require_setup()
         _refresh_skill_if_stale()
         config = _load_config()
-        token = _get_repo_token(config)
+        token = _get_repo_token(config, args.repo)
         if args.clear:
             try:
                 _advance_cursor(config, token)
@@ -542,7 +555,7 @@ def main():
         asyncio.run(peek(args.server, token))
     elif args.command == "last":
         _refresh_skill_if_stale()
-        last(do_clear=args.clear)
+        last(do_clear=args.clear, requested=args.repo)
     elif args.command == "nuke":
         nuke()
     else:

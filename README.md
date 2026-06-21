@@ -45,6 +45,8 @@ Your app needs [ghosttrap-sdk](https://github.com/alex-rowley/ghosttrap-sdk) to 
 | `ghosttrap clear` | Skip all outstanding errors |
 | `ghosttrap nuke` | Permanently delete every server-side row for the current repo (errors + token). Requires typed confirmation. |
 
+`peek`, `watch`, `last`, and `clear` accept `--repo owner/name` to target a specific claimed repo when you're not inside its working tree (e.g. `ghosttrap peek --repo alex-rowley/ghosttrap-cli`). Otherwise they detect the repo from cwd. `nuke` is intentionally cwd-locked.
+
 ## How it works
 
 - **Setup** authenticates with GitHub (via the active `gh` account) to prove you have access to the repo, then saves a repo token locally. If your active `gh` account can't see the repo, setup fails with a clear message; switch with `gh auth switch` and retry.
