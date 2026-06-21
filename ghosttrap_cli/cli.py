@@ -26,7 +26,7 @@ KNOWN_SKILL_HASHES = {
     "1c3a0507fab027abc0f176ce2fd88cad28276bef4fcef46cdb497f53967346e1",  # v0.3.16
 }
 
-__version__ = "0.3.16"
+__version__ = "0.3.17"
 
 GHOSTTRAP_SERVER = "wss://ghosttrap.io/stream/"
 CONFIG_DIR = os.path.expanduser("~/.ghosttrap")
