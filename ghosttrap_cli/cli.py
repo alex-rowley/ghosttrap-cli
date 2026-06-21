@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 import websockets
@@ -83,6 +84,8 @@ Read `~/.ghosttrap/config.json` for state. It contains:
 ## Other commands
 
 - `ghosttrap last` — fetch the single most recent error and exit immediately, no waiting. Useful when the user wants to look at the latest error without starting a watch. Add `--clear` to also skip everything older in one shot.
+- `ghosttrap list [n]` — print a numbered summary of the most recent `n` errors (default 10, max 50). Does not move the cursor. Caches the ordered ids in config so a follow-up `ghosttrap show <i>` returns full details for that row.
+- `ghosttrap show <i>` — full details for the i-th row from the most recent `ghosttrap list`. Does not move the cursor.
 - `ghosttrap clear` — manually skip outstanding errors without waiting. Useful if the user explicitly wants to drop the queue.
 - `ghosttrap nuke` — permanently delete every server-side row for the current repo (errors + the Repo row + its token). Requires the user to type the repo name `owner/name` to confirm. Only run if the user explicitly asks to wipe server data — never proactively. After it succeeds the token is dead; the user would need to `ghosttrap setup` again to use this repo.
 
@@ -201,26 +204,33 @@ def get_gh_token():
         sys.exit(1)
 
 
-def _get_repo_token(config, requested=None):
-    """Get the repo token. If `requested` is 'owner/name', match strictly. Else cwd, else first."""
+def _get_repo_entry(config, requested=None):
+    """Return (key, entry) for the chosen repo. Same resolution rules as _get_repo_token."""
     repos = config.get("repos", {})
     if not repos:
         print("error: no repos configured. run 'ghosttrap setup' first.", file=sys.stderr)
         sys.exit(1)
     if requested:
-        for entry in repos.values():
+        for k, entry in repos.items():
             if f"{entry.get('owner')}/{entry.get('name')}" == requested:
-                return entry["token"]
+                return k, entry
         available = sorted(f"{e['owner']}/{e['name']}" for e in repos.values())
         print(f"error: '{requested}' is not in your config.", file=sys.stderr)
         print(f"available: {', '.join(available)}", file=sys.stderr)
         sys.exit(1)
     cwd_repo = _detect_repo_from_cwd()
     if cwd_repo:
-        for entry in repos.values():
+        for k, entry in repos.items():
             if f"{entry.get('owner')}/{entry.get('name')}" == cwd_repo:
-                return entry["token"]
-    return next(iter(repos.values()))["token"]
+                return k, entry
+    k = next(iter(repos))
+    return k, repos[k]
+
+
+def _get_repo_token(config, requested=None):
+    """Get the repo token. If `requested` is 'owner/name', match strictly. Else cwd, else first."""
+    _, entry = _get_repo_entry(config, requested)
+    return entry["token"]
 
 
 async def _connect_and_handle(server_url, token, config, once=False):
@@ -464,6 +474,126 @@ def nuke():
     _save_config(config)
 
 
+def _rel_time(iso):
+    if not iso:
+        return "?"
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - dt
+        s = int(delta.total_seconds())
+        if s < 60:
+            return f"{s}s ago"
+        if s < 3600:
+            return f"{s // 60}m ago"
+        if s < 86400:
+            return f"{s // 3600}h ago"
+        if s < 86400 * 30:
+            return f"{s // 86400}d ago"
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return iso
+
+
+def _print_error_details(error):
+    print(json.dumps({"type": "error", "error": error}))
+    sys.stdout.flush()
+    print(f"\n{'='*60}", file=sys.stderr)
+    print(f"  {error.get('repo', '?')}", file=sys.stderr)
+    print(f"  {error.get('type', '?')}: {error.get('message', '')}", file=sys.stderr)
+    frames = error.get("frames", [])
+    if frames:
+        f = frames[-1]
+        print(f"  at {f.get('file', '?')}:{f.get('line', '?')} in {f.get('function', '?')}", file=sys.stderr)
+    print(f"{'='*60}", file=sys.stderr)
+
+
+def list_recent(n=10, requested=None):
+    _require_setup()
+    config = _load_config()
+    _check_cli_version(config)
+    n = max(1, min(int(n), 50))
+    key, entry = _get_repo_entry(config, requested)
+    token = entry["token"]
+    server = GHOSTTRAP_SERVER.replace("wss://", "https://").replace("/stream/", "")
+    url = f"{server}/list/{token}/?n={n}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ghosttrap-cli"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    errors = data.get("errors", [])
+    if not errors:
+        print("no errors yet", file=sys.stderr)
+        entry["recent"] = []
+        _save_config(config)
+        return
+
+    entry["recent"] = [e["id"] for e in errors]
+    _save_config(config)
+
+    width = len(str(len(errors)))
+    for i, e in enumerate(errors, 1):
+        when = _rel_time(e.get("created_at"))
+        etype = e.get("type") or "?"
+        msg = (e.get("message") or "").splitlines()[0] if e.get("message") else ""
+        if len(msg) > 60:
+            msg = msg[:57] + "..."
+        loc = ""
+        if e.get("file"):
+            loc = f"{e['file']}:{e.get('line', '?')}"
+            if e.get("function"):
+                loc += f" ({e['function']})"
+        print(f"  {i:>{width}}  {when:<12}  {etype:<20}  {msg:<60}  {loc}")
+    print(f"\nrun 'ghosttrap show <n>' to see full details. cursor unchanged.", file=sys.stderr)
+
+
+def show(index, requested=None):
+    _require_setup()
+    config = _load_config()
+    _check_cli_version(config)
+    key, entry = _get_repo_entry(config, requested)
+    recent = entry.get("recent") or []
+    if not recent:
+        print("error: no recent list cached. run 'ghosttrap list' first.", file=sys.stderr)
+        sys.exit(1)
+    try:
+        i = int(index)
+    except (TypeError, ValueError):
+        print(f"error: '{index}' is not a number.", file=sys.stderr)
+        sys.exit(1)
+    if i < 1 or i > len(recent):
+        print(f"error: index out of range. last list had {len(recent)} entries.", file=sys.stderr)
+        sys.exit(1)
+    db_id = recent[i - 1]
+    token = entry["token"]
+    server = GHOSTTRAP_SERVER.replace("wss://", "https://").replace("/stream/", "")
+    url = f"{server}/error/{token}/{db_id}/"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ghosttrap-cli"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print(f"error: this error no longer exists on the server (id #{db_id}).", file=sys.stderr)
+        else:
+            print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+    error = data.get("error")
+    if not error:
+        print(f"error: empty response", file=sys.stderr)
+        sys.exit(1)
+    _print_error_details(error)
+
+
 def last(do_clear=False, requested=None):
     _require_setup()
     config = _load_config()
@@ -484,17 +614,7 @@ def last(do_clear=False, requested=None):
         print("no errors yet", file=sys.stderr)
         return
 
-    print(json.dumps({"type": "error", "error": error}))
-    sys.stdout.flush()
-
-    print(f"\n{'='*60}", file=sys.stderr)
-    print(f"  {error.get('repo', '?')}", file=sys.stderr)
-    print(f"  {error.get('type', '?')}: {error.get('message', '')}", file=sys.stderr)
-    frames = error.get("frames", [])
-    if frames:
-        f = frames[-1]
-        print(f"  at {f.get('file', '?')}:{f.get('line', '?')} in {f.get('function', '?')}", file=sys.stderr)
-    print(f"{'='*60}", file=sys.stderr)
+    _print_error_details(error)
 
     if do_clear:
         try:
@@ -526,6 +646,14 @@ def main():
     last_parser.add_argument("--clear", action="store_true", help="Also skip remaining outstanding errors")
     last_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
 
+    list_parser = sub.add_parser("list", help="List the most recent N errors (summary only, cursor unchanged)")
+    list_parser.add_argument("n", nargs="?", type=int, default=10, help="How many to list (default 10, max 50)")
+    list_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
+
+    show_parser = sub.add_parser("show", help="Show full details for an index from the last 'list' (cursor unchanged)")
+    show_parser.add_argument("index", type=int, help="1-based index from the last 'ghosttrap list'")
+    show_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
+
     sub.add_parser("nuke", help="Permanently delete all server data for the current repo")
 
     args = parser.parse_args()
@@ -556,6 +684,12 @@ def main():
     elif args.command == "last":
         _refresh_skill_if_stale()
         last(do_clear=args.clear, requested=args.repo)
+    elif args.command == "list":
+        _refresh_skill_if_stale()
+        list_recent(n=args.n, requested=args.repo)
+    elif args.command == "show":
+        _refresh_skill_if_stale()
+        show(args.index, requested=args.repo)
     elif args.command == "nuke":
         nuke()
     else:

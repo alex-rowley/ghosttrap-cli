@@ -42,6 +42,8 @@ Your app needs [ghosttrap-sdk](https://github.com/alex-rowley/ghosttrap-sdk) to 
 | `ghosttrap last` | Fetch the most recent error and exit (no waiting) |
 | `ghosttrap last --clear` | Fetch the most recent error and skip everything older |
 | `ghosttrap watch` | Stream all errors continuously |
+| `ghosttrap list [n]` | Print a numbered summary of the most recent `n` errors (default 10, max 50). Doesn't move the cursor. |
+| `ghosttrap show <i>` | Full details for row `i` from the last `list` (1-based). Doesn't move the cursor. |
 | `ghosttrap clear` | Skip all outstanding errors |
 | `ghosttrap nuke` | Permanently delete every server-side row for the current repo (errors + token). Requires typed confirmation. |
 
