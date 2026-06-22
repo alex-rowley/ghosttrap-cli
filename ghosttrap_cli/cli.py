@@ -2,29 +2,16 @@
 
 import argparse
 import asyncio
-import hashlib
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
 
 import websockets
-
-KNOWN_SKILL_HASHES = {
-    "aeda67bc5971bd8af4d7ebe819ebcce5acead562fa618227a1798b4b5ae7143e",  # v0.2.0
-    "0f2d2f4105e393fc69084d404d5a8154ba5d97fd23f92810c51345e3dc68e9a0",  # v0.3.0
-    "8564b65b8ab5c63283cda1706e30ca62bc4e111d33ba8918220f4b556ad01da1",  # v0.3.1..v0.3.3
-    "5759b2e0dc8ca47c3801915fd688cc8da878a7ab8d405f5183ffd7e8c8df4c55",  # v0.3.4..v0.3.7
-    "0651bb4247cf5c68960ff5b63d6a5d0c85ff1ce08e7966ab4823601ff02cf1f4",  # v0.3.9
-    "38810f43867a2a91420cc3dacbc71d2acabd7125596fd5b43f222b49725c9696",  # v0.3.10
-    "19b67d913dc5214ee4db3610bd8749da67324c174b904b5da71ee6de13e23e63",  # v0.3.11
-    "bf7768c3de266b7018d5c722c6c9991b487e7897786b3a406c460842cdcde8b5",  # v0.3.12
-    "d3f594c4c3601a4594c18ebc5e16dfd4abad4ab97d56285ecc20634b919b6731",  # v0.3.14
-    "1c3a0507fab027abc0f176ce2fd88cad28276bef4fcef46cdb497f53967346e1",  # v0.3.16
-}
 
 __version__ = "0.3.17"
 
@@ -75,6 +62,10 @@ Read `~/.ghosttrap/config.json` for state. It contains:
 2. Find a matching entry in config by looking for one whose `owner`/`name` equals the detected slug. If no match, tell the user to run `ghosttrap setup`. (The owner/name on a config entry auto-refreshes from the server when the repo is renamed or transferred, so always match against the entry's stored owner/name, not the config key.)
 3. If `sdk_installed` is false or missing: install the SDK (`pip install ghosttrap-sdk`), wire `ghosttrap.init("<token>")` into the app startup. For Django projects, also add `"ghosttrap.django.GhostTrapApp"` to INSTALLED_APPS (re-attaches logging handler after Django's dictConfig) and `"ghosttrap.django.GhostTrapMiddleware"` to MIDDLEWARE (catches unhandled view exceptions). The SDK auto-hooks into Celery task_failure if Celery is installed, and attaches a logging handler for logger.exception() calls. Use whatever pattern the project already uses for configuration (env vars, settings files, hardcoded — match the existing style). Then update the config: set `sdk_installed: true`, `sdk_version`, `init_file` to record what you did. Only pass `send_user=True` to `init()` if the user explicitly asks for user context in reports — it's PII and stays off by default.
 4. Run `ghosttrap peek --clear` with `run_in_background: true`. The `--clear` flag skips any stale backlog from prior sessions so you only get fresh errors.
+
+## Manual capture
+
+For caught exceptions or non-exception conditions the user explicitly wants reported, use `ghosttrap.trap(exc_or_message)` from app code — pass an exception instance or a string. Synthetic string events arrive as type `TrappedEvent` with the caller's stack. Only wire this in when the user asks for it; don't add `trap()` calls speculatively.
 
 ## When peek returns
 
@@ -306,22 +297,69 @@ def _require_setup():
         sys.exit(1)
 
 
-def _write_skill():
+def _write_skill(config=None):
     os.makedirs(SKILL_DIR, exist_ok=True)
     with open(SKILL_FILE, "w") as f:
         f.write(SKILL_CONTENT)
+    if config is None:
+        config = _load_config()
+    config["skill_baseline"] = SKILL_CONTENT
+    _save_config(config)
+
+
+def _merge_skill(base, local, remote):
+    """3-way merge via `git merge-file -p`. Returns (merged_text, clean)."""
+    with tempfile.TemporaryDirectory() as d:
+        bp = os.path.join(d, "base")
+        lp = os.path.join(d, "local")
+        rp = os.path.join(d, "remote")
+        for path, text in [(bp, base), (lp, local), (rp, remote)]:
+            with open(path, "w") as f:
+                f.write(text)
+        result = subprocess.run(
+            ["git", "merge-file", "-p",
+             "-L", "your edits", "-L", "previous release", "-L", "new release",
+             lp, bp, rp],
+            capture_output=True, text=True,
+        )
+        return result.stdout, result.returncode == 0
 
 
 def _refresh_skill_if_stale():
     if not os.path.exists(SKILL_FILE):
         return
     with open(SKILL_FILE) as f:
-        content = f.read()
-    if content == SKILL_CONTENT:
+        on_disk = f.read()
+    if on_disk == SKILL_CONTENT:
         return
-    if hashlib.sha256(content.encode()).hexdigest() in KNOWN_SKILL_HASHES:
-        _write_skill()
+    config = _load_config()
+    baseline = config.get("skill_baseline")
+    if baseline is None:
+        # Pre-baseline install: adopt current on-disk content as the baseline
+        # so future releases can 3-way-merge instead of clobbering local edits.
+        config["skill_baseline"] = on_disk
+        _save_config(config)
+        return
+    if baseline == on_disk:
+        _write_skill(config)
         print("ghosttrap skill file updated", file=sys.stderr)
+        return
+    merged, clean = _merge_skill(baseline, on_disk, SKILL_CONTENT)
+    if clean:
+        with open(SKILL_FILE, "w") as f:
+            f.write(merged)
+        config["skill_baseline"] = SKILL_CONTENT
+        _save_config(config)
+        print("ghosttrap skill file updated (merged with your local edits)", file=sys.stderr)
+        return
+    new_path = SKILL_FILE + ".new"
+    with open(new_path, "w") as f:
+        f.write(merged)
+    print(
+        f"ghosttrap skill update has conflicts with your local edits; "
+        f"merged candidate at {new_path} — resolve, copy to {SKILL_FILE}, and rerun.",
+        file=sys.stderr,
+    )
 
 
 async def setup(server_url, token):
@@ -350,7 +388,7 @@ async def setup(server_url, token):
 
             repos = event.get("repos", [])
             _save_repos(config, repos)
-            _write_skill()
+            _write_skill(config)
 
             target = repos[0] if repos else None
 
