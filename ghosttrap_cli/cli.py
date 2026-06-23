@@ -206,9 +206,14 @@ def _get_repo_entry(config, requested=None):
         for k, entry in repos.items():
             if f"{entry.get('owner')}/{entry.get('name')}" == requested:
                 return k, entry
-        available = sorted(f"{e['owner']}/{e['name']}" for e in repos.values())
+        available = sorted(
+            f"{e.get('owner')}/{e.get('name')}"
+            for e in repos.values()
+            if e.get('owner') and e.get('name')
+        )
         print(f"error: '{requested}' is not in your config.", file=sys.stderr)
-        print(f"available: {', '.join(available)}", file=sys.stderr)
+        if available:
+            print(f"available: {', '.join(available)}", file=sys.stderr)
         sys.exit(1)
     cwd_repo = _detect_repo_from_cwd()
     if cwd_repo:
