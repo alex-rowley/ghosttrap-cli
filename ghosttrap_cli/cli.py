@@ -231,7 +231,10 @@ def _get_repo_token(config, requested=None):
 
 
 async def _connect_and_handle(server_url, token, config, once=False):
-    """Core WebSocket loop. If once=True, exit after the first error."""
+    """Core WebSocket loop. If once=True, returns True after the first error event.
+    Returns False if the server closed the socket without sending an error
+    (e.g. idle timeout) so callers can distinguish 'job done' from 'reconnect me'.
+    """
     since = config.get("cursor")
     url = f"{server_url}?token={token}"
     if since is not None:
@@ -293,7 +296,8 @@ async def _connect_and_handle(server_url, token, config, once=False):
                     print(f"{'='*60}", file=sys.stderr)
 
                 if once:
-                    return
+                    return True
+    return False
 
 
 def _require_setup():
@@ -419,9 +423,10 @@ async def watch(server_url, token):
     while True:
         try:
             await _connect_and_handle(server_url, token, config, once=False)
+            print("connection closed by server, reconnecting...", file=sys.stderr)
         except (websockets.ConnectionClosed, websockets.InvalidStatus, ConnectionError, OSError):
             print("connection lost, reconnecting...", file=sys.stderr)
-            await asyncio.sleep(60)
+        await asyncio.sleep(60)
 
 
 async def peek(server_url, token):
@@ -429,11 +434,13 @@ async def peek(server_url, token):
     _check_cli_version(config)
     while True:
         try:
-            await _connect_and_handle(server_url, token, config, once=True)
-            return  # got an error, printed it, done
+            got_error = await _connect_and_handle(server_url, token, config, once=True)
+            if got_error:
+                return
+            print("connection closed by server, reconnecting...", file=sys.stderr)
         except (websockets.ConnectionClosed, websockets.InvalidStatus, ConnectionError, OSError):
             print("connection lost, reconnecting...", file=sys.stderr)
-            await asyncio.sleep(60)
+        await asyncio.sleep(60)
 
 
 def _advance_cursor(config, token):
