@@ -13,7 +13,7 @@ import urllib.request
 
 import websockets
 
-__version__ = "0.3.19"
+__version__ = "0.3.20"
 
 GHOSTTRAP_SERVER = "wss://ghosttrap.io/stream/"
 CONFIG_DIR = os.path.expanduser("~/.ghosttrap")
