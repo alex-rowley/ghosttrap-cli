@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,19 @@ import urllib.error
 import urllib.request
 
 import websockets
+
+
+def _harden_signals():
+    """Explicitly ignore SIGURG so no process supervisor can nudge peek out
+    with an out-of-band signal. POSIX default is already ignore; this makes
+    it defensive against layers that change the disposition.
+    """
+    s = getattr(signal, "SIGURG", None)
+    if s is not None:
+        try:
+            signal.signal(s, signal.SIG_IGN)
+        except (OSError, ValueError):
+            pass
 
 __version__ = "0.3.20"
 
@@ -416,6 +430,31 @@ async def setup(server_url, token):
         sys.exit(1)
 
 
+# Exception types we knowingly retry on. All represent a transient network/transport
+# blip rather than a semantic error from the server:
+#   - ConnectionClosed: peer closed the WebSocket (either side of the handshake)
+#   - InvalidStatus:    non-101 HTTP response during upgrade (e.g. 502 from a proxy)
+#   - ConnectionError:  builtin — refused, reset, unreachable
+#   - OSError:          DNS failure, transient socket errors (gaierror is a subclass)
+# Anything else escapes and prints a diagnostic line first so we can add it here
+# in the next release. Semantic rejections from the server ({"type": "rejected"})
+# raise SystemExit, which we deliberately do NOT catch — those are real errors.
+_RETRYABLE = (
+    websockets.ConnectionClosed,
+    websockets.InvalidStatus,
+    ConnectionError,
+    OSError,
+)
+
+
+def _log_unexpected(e):
+    print(
+        f"unexpected {type(e).__module__}.{type(e).__name__}: {e} — "
+        f"not currently in the retry list; please report so we can add it.",
+        file=sys.stderr,
+    )
+
+
 async def watch(server_url, token):
     config = _load_config()
     print(f"connecting to {server_url}...", file=sys.stderr)
@@ -424,8 +463,11 @@ async def watch(server_url, token):
         try:
             await _connect_and_handle(server_url, token, config, once=False)
             print("connection closed by server, reconnecting...", file=sys.stderr)
-        except (websockets.ConnectionClosed, websockets.InvalidStatus, ConnectionError, OSError):
+        except _RETRYABLE:
             print("connection lost, reconnecting...", file=sys.stderr)
+        except Exception as e:
+            _log_unexpected(e)
+            raise
         await asyncio.sleep(60)
 
 
@@ -438,8 +480,11 @@ async def peek(server_url, token):
             if got_error:
                 return
             print("connection closed by server, reconnecting...", file=sys.stderr)
-        except (websockets.ConnectionClosed, websockets.InvalidStatus, ConnectionError, OSError):
+        except _RETRYABLE:
             print("connection lost, reconnecting...", file=sys.stderr)
+        except Exception as e:
+            _log_unexpected(e)
+            raise
         await asyncio.sleep(60)
 
 
@@ -676,6 +721,7 @@ def last(do_clear=False, requested=None):
 
 
 def main():
+    _harden_signals()
     parser = argparse.ArgumentParser(prog="ghosttrap", description="Watch for errors from ghosttrap.io")
     sub = parser.add_subparsers(dest="command")
 
