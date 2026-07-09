@@ -43,18 +43,19 @@ If you want to manually flag a caught exception or a non-exception condition, ca
 | `ghosttrap peek --clear` | Skip outstanding errors, then wait for the next one |
 | `ghosttrap last` | Fetch the most recent error and exit (no waiting) |
 | `ghosttrap last --clear` | Fetch the most recent error and skip everything older |
-| `ghosttrap watch` | Stream all errors continuously |
+| `ghosttrap watch` | Deprecated — `peek` reconnects until an error arrives, which covers the streaming case |
 | `ghosttrap list [n]` | Print a numbered summary of the most recent `n` errors (default 10, max 50). Doesn't move the cursor. |
 | `ghosttrap show <i>` | Full details for row `i` from the last `list` (1-based). Doesn't move the cursor. |
 | `ghosttrap clear` | Skip all outstanding errors |
 | `ghosttrap nuke` | Permanently delete every server-side row for the current repo (errors + token). Requires typed confirmation. |
 
-`peek`, `watch`, `last`, and `clear` accept `--repo owner/name` to target a specific claimed repo when you're not inside its working tree (e.g. `ghosttrap peek --repo alex-rowley/ghosttrap-cli`). Otherwise they detect the repo from cwd. `nuke` is intentionally cwd-locked.
+Every command except `setup` and `nuke` accepts `--repo owner/name` to target a specific claimed repo when you're not inside its working tree (e.g. `ghosttrap peek --repo alex-rowley/ghosttrap-cli`). Otherwise the repo is detected from cwd. `nuke` is intentionally cwd-locked.
 
 ## How it works
 
 - **Setup** authenticates with GitHub (via the active `gh` account) to prove you have access to the repo, then saves a repo token locally. If your active `gh` account can't see the repo, setup fails with a clear message; switch with `gh auth switch` and retry.
-- **Peek** and **watch** connect to ghosttrap.io using that token — no GitHub auth needed after setup
+- **Peek** connects to ghosttrap.io using that token — no GitHub auth needed after setup
+- If the connection drops or the server closes an idle socket, peek reconnects with a 60-second backoff for as long as it runs — it only exits once it has delivered an error (or hit a real failure, which it reports on stderr)
 - Errors that arrive while you're offline are replayed on next connect (cursor-based, no duplicates)
 - Repos are tracked by GitHub's immutable repo id, so a rename or transfer doesn't require any action — the next connect picks up the new `owner/name` and your token keeps working
 - Local state is stored in `~/.ghosttrap/config.json`, keyed by GitHub repo id

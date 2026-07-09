@@ -67,8 +67,9 @@ description: Production error monitoring via ghosttrap.io. Trigger when starting
 # Ghosttrap
 
 Read `~/.ghosttrap/config.json` for state. It contains:
-- `repos`: map keyed by GitHub repo id (stringified int) to `{"github_id": int, "owner": str, "name": str, "token": "t_xxx", "sdk_installed": bool, "sdk_version": str, "init_file": str}`.
+- `repos`: map keyed by GitHub repo id (stringified int) to `{"github_id": int, "owner": str, "name": str, "token": "t_xxx", "sdk_installed": bool, "sdk_version": str, "init_file": str}`. Entries may also carry `recent`, the error ids cached by the last `ghosttrap list` (managed by the CLI — leave it alone).
 - `cursor`: last seen error ID
+- `skill_baseline`: the previous release's skill text, used to 3-way-merge skill updates with local edits. Never edit or delete it.
 
 ## On session start
 
@@ -89,17 +90,19 @@ For caught exceptions or non-exception conditions the user explicitly wants repo
 
 ## Other commands
 
-- `ghosttrap last` — fetch the single most recent error and exit immediately, no waiting. Useful when the user wants to look at the latest error without starting a watch. Add `--clear` to also skip everything older in one shot.
+- `ghosttrap last` — fetch the single most recent error and exit immediately, no waiting. Useful when the user wants to look at the latest error without blocking on a peek. Add `--clear` to also skip everything older in one shot.
 - `ghosttrap list [n]` — print a numbered summary of the most recent `n` errors (default 10, max 50). Does not move the cursor. Caches the ordered ids in config so a follow-up `ghosttrap show <i>` returns full details for that row.
 - `ghosttrap show <i>` — full details for the i-th row from the most recent `ghosttrap list`. Does not move the cursor.
 - `ghosttrap clear` — manually skip outstanding errors without waiting. Useful if the user explicitly wants to drop the queue.
 - `ghosttrap nuke` — permanently delete every server-side row for the current repo (errors + the Repo row + its token). Requires the user to type the repo name `owner/name` to confirm. Only run if the user explicitly asks to wipe server data — never proactively. After it succeeds the token is dead; the user would need to `ghosttrap setup` again to use this repo.
 
+`peek` and every command above except `nuke` accept `--repo owner/name` to target another claimed repo when the cwd isn't inside it (e.g. `ghosttrap list --repo owner/name`).
+
 ## Rules
 
 - Always `run_in_background: true` for peek — it blocks.
 - Don't run multiple peeks at once.
-- If peek exits without output (connection lost), restart it.
+- Peek reconnects by itself (60s backoff) when the connection drops — a quiet peek is waiting, not hung. It only exits after printing an error event, or with a message on stderr if something is actually wrong; restart it only in that second case.
 - After installing/updating the SDK, write the state back to config.json.
 """
 
@@ -730,7 +733,7 @@ def main():
     clear_parser = sub.add_parser("clear", help="Skip all outstanding errors")
     clear_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
 
-    watch_parser = sub.add_parser("watch", help="Stream errors in real time")
+    watch_parser = sub.add_parser("watch", help="Deprecated: stream errors in real time (use peek)")
     watch_parser.add_argument("--server", default=GHOSTTRAP_SERVER, help="WebSocket server URL")
     watch_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
 
@@ -761,6 +764,11 @@ def main():
     elif args.command == "clear":
         clear(requested=args.repo)
     elif args.command == "watch":
+        print(
+            "warning: 'watch' is deprecated and may be removed in a future release — "
+            "'peek' now reconnects until an error arrives.",
+            file=sys.stderr,
+        )
         _require_setup()
         _refresh_skill_if_stale()
         config = _load_config()
