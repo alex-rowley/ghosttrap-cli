@@ -237,12 +237,22 @@ def _get_repo_entry(config, requested=None):
         for k, entry in repos.items():
             if f"{entry.get('owner')}/{entry.get('name')}" == cwd_repo:
                 return k, entry
-    k = next(iter(repos))
-    return k, repos[k]
+    if cwd_repo:
+        print(f"error: {cwd_repo} is not in your config. run 'ghosttrap setup' to claim it, or pass --repo owner/name.", file=sys.stderr)
+    else:
+        print("error: not inside a git repo with a github remote, and no --repo given.", file=sys.stderr)
+    available = sorted(
+        f"{e.get('owner')}/{e.get('name')}"
+        for e in repos.values()
+        if e.get('owner') and e.get('name')
+    )
+    if available:
+        print(f"available: {', '.join(available)}", file=sys.stderr)
+    sys.exit(1)
 
 
 def _get_repo_token(config, requested=None):
-    """Get the repo token. If `requested` is 'owner/name', match strictly. Else cwd, else first."""
+    """Get the repo token. If `requested` is 'owner/name', match strictly. Else cwd, else error out."""
     _, entry = _get_repo_entry(config, requested)
     return entry["token"]
 
