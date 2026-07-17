@@ -82,6 +82,10 @@ Read `~/.ghosttrap/config.json` for state. It contains:
 
 For caught exceptions or non-exception conditions the user explicitly wants reported, use `ghosttrap.trap(exc_or_message)` from app code — pass an exception instance or a string. Synthetic string events arrive as type `TrappedEvent` with the caller's stack. Only wire this in when the user asks for it; don't add `trap()` calls speculatively.
 
+## Browser errors
+
+If the user wants browser-side JavaScript errors captured (often described as "console errors that never reach ghosttrap"), the SDK's Django integration ships a same-origin relay (ghosttrap-sdk >= 0.4.6). Wire it in only when asked: add `path("ghosttrap/", include("ghosttrap.django.urls"))` to the root URLconf and `<script src="{% static 'ghosttrap/ghosttrap.js' %}" defer></script>` to the base template. Browser events then arrive like any other error — JS error type, page URL in the traceback header, JS stack as frames (minified if the app's bundles are; there is no source-map support).
+
 ## When peek returns
 
 1. **Immediately restart peek** in the background before doing anything else — this ensures you're listening for the next error while you work on the current one. Use plain `ghosttrap peek` here (no `--clear`) — you only want to skip backlog at session start.
