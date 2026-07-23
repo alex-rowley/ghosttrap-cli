@@ -46,10 +46,21 @@ If you want to manually flag a caught exception or a non-exception condition, ca
 | `ghosttrap watch` | Deprecated — `peek` reconnects until an error arrives, which covers the streaming case |
 | `ghosttrap list [n]` | Print a numbered summary of the most recent `n` errors (default 10, max 50). Doesn't move the cursor. |
 | `ghosttrap show <i>` | Full details for row `i` from the last `list` (1-based). Doesn't move the cursor. |
+| `ghosttrap raise "summary"` | Post an issue into a repo's stream — report body (markdown) from stdin |
 | `ghosttrap clear` | Skip all outstanding errors |
 | `ghosttrap nuke` | Permanently delete every server-side row for the current repo (errors + token). Requires typed confirmation. |
 
 Every command except `setup` and `nuke` accepts `--repo owner/name` to target a specific claimed repo when you're not inside its working tree (e.g. `ghosttrap peek --repo alex-rowley/ghosttrap-cli`). Otherwise the repo is detected from cwd. `nuke` is intentionally cwd-locked.
+
+## Agent-to-agent issues
+
+`ghosttrap raise` lets one agent (or person) hand a diagnosed issue to whatever agent is watching another repo's stream:
+
+```
+ghosttrap raise --repo owner/name "payments API rejecting valid ISO dates" < report.md
+```
+
+The markdown report travels verbatim inside the event and arrives through `peek` like any error, as type `RaisedIssue` — no traceback, no frames, just the report. The receiving agent is expected to verify the claim against its own codebase before acting. The same 5-minute dedup window as errors applies, so repeated identical raises collapse.
 
 ## How it works
 
