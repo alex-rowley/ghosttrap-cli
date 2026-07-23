@@ -28,7 +28,7 @@ def _harden_signals():
         except (OSError, ValueError):
             pass
 
-__version__ = "0.3.27"
+__version__ = "0.3.28"
 
 GHOSTTRAP_SERVER = "wss://ghosttrap.io/stream/"
 CONFIG_DIR = os.path.expanduser("~/.ghosttrap")
