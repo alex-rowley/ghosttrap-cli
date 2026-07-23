@@ -39,6 +39,19 @@ GITHUB_CLI_RELEASES = "https://api.github.com/repos/alex-rowley/ghosttrap-cli/re
 VERSION_CHECK_TTL = 86400  # check once per day
 
 
+def _is_newer(latest, installed):
+    """True only if `latest` is a strictly newer x.y.z than `installed`.
+    Unparseable versions return False — staying quiet beats advertising a
+    downgrade when a stale or odd version string shows up.
+    """
+    try:
+        lt = tuple(int(x) for x in latest.split("."))
+        it = tuple(int(x) for x in installed.split("."))
+    except (AttributeError, ValueError):
+        return False
+    return lt > it
+
+
 def _check_cli_version(config):
     """Check if a newer CLI version is available. Caches for 24h."""
     last_check = config.get("cli_version_check", 0)
@@ -52,7 +65,7 @@ def _check_cli_version(config):
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read())
             latest = data.get("tag_name", "").lstrip("v")
-            if latest and latest != __version__:
+            if _is_newer(latest, __version__):
                 print(f"ghosttrap-cli {latest} available (you have {__version__})", file=sys.stderr)
     except Exception:
         pass
@@ -309,7 +322,7 @@ async def _connect_and_handle(server_url, token, config, once=False):
                         for entry in config.get("repos", {}).values():
                             if f"{entry.get('owner')}/{entry.get('name')}" == cwd_repo:
                                 installed = entry.get("sdk_version")
-                                if installed and installed != sdk_latest:
+                                if installed and _is_newer(sdk_latest, installed):
                                     print(f"ghosttrap-sdk {sdk_latest} available (you have {installed})", file=sys.stderr)
                                 break
 
