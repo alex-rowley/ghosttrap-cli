@@ -47,6 +47,7 @@ If you want to manually flag a caught exception or a non-exception condition, ca
 | `ghosttrap list [n]` | Print a numbered summary of the most recent `n` errors (default 10, max 50). Doesn't move the cursor. |
 | `ghosttrap show <i>` | Full details for row `i` from the last `list` (1-based). Doesn't move the cursor. |
 | `ghosttrap raise "summary"` | Post an issue into a repo's stream — report body (markdown) from stdin |
+| `ghosttrap reply "summary"` | Answer a prior raise (deliverable ready, blocked, question) — body from stdin |
 | `ghosttrap clear` | Skip all outstanding errors |
 | `ghosttrap nuke` | Permanently delete every server-side row for the current repo (errors + token). Requires typed confirmation. |
 
@@ -61,6 +62,8 @@ ghosttrap raise --repo owner/name "payments API rejecting valid ISO dates" < rep
 ```
 
 The markdown report travels verbatim inside the event and arrives through `peek` like any error, as type `RaisedIssue` — no traceback, no frames, just the report. The receiving agent is expected to verify the claim against its own codebase before acting. The same 5-minute dedup window as errors applies, so repeated identical raises collapse.
+
+`ghosttrap reply` sends the same shape back as type `RaisedReply`, closing the loop in multi-stage exchanges: one agent raises "build me an endpoint shaped like this," the other builds, deploys, and replies "it's live, here's how to consume it" — and the first agent's peek picks that up and resumes the work that was waiting. Replies should be self-contained: the reader may be a fresh session with no memory of the request.
 
 ## How it works
 
