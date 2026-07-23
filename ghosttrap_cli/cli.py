@@ -170,19 +170,24 @@ def _is_known_repo(config, repo_entry):
 
 
 def _save_repos(config, repos):
-    if "repos" not in config:
-        config["repos"] = {}
+    # Mutate a fresh load, not the caller's possibly-stale copy — long-running
+    # peek/watch processes must not overwrite config keys (skill_baseline,
+    # recent, cursor) that other processes changed since they started.
+    fresh = _load_config()
+    if "repos" not in fresh:
+        fresh["repos"] = {}
     for r in repos:
         key = _repo_key(r)
-        existing = config["repos"].get(key, {})
+        existing = fresh["repos"].get(key, {})
         existing.update({
             "github_id": r.get("github_id"),
             "owner": r["owner"],
             "name": r["name"],
             "token": r["token"],
         })
-        config["repos"][key] = existing
-    _save_config(config)
+        fresh["repos"][key] = existing
+    _save_config(fresh)
+    config["repos"] = fresh["repos"]
 
 
 def _detect_repo_from_cwd():
@@ -343,8 +348,14 @@ async def _connect_and_handle(server_url, token, config, once=False):
             if event.get("type") == "error":
                 error_id = event.get("error", {}).get("id")
                 if error_id is not None:
+                    # Keep the in-memory view for reconnect URLs, but write the
+                    # cursor into a FRESH load of the config: a long-running peek
+                    # holding a stale copy must not clobber keys other processes
+                    # updated meanwhile (skill_baseline, recent, repos).
                     config["cursor"] = error_id
-                    _save_config(config)
+                    fresh = _load_config()
+                    fresh["cursor"] = error_id
+                    _save_config(fresh)
 
                 print(json.dumps(event))
                 sys.stdout.flush()
