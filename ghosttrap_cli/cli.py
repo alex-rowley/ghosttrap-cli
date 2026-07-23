@@ -98,7 +98,7 @@ For caught exceptions or non-exception conditions the user explicitly wants repo
 
 ## Browser errors
 
-If the user wants browser-side JavaScript errors captured (often described as "console errors that never reach ghosttrap"), the SDK's Django integration ships a same-origin relay (ghosttrap-sdk >= 0.4.6). Wire it in only when asked: add `path("ghosttrap/", include("ghosttrap.django.urls"))` to the root URLconf and `<script src="{% static 'ghosttrap/ghosttrap.js' %}" defer></script>` to the base template. Browser events then arrive like any other error — JS error type, page URL in the traceback header, JS stack as frames (minified if the app's bundles are; there is no source-map support).
+Browser-side JavaScript capture is currently disabled (the sdk's relay endpoint answers 410 as of 0.4.9): it accepted anonymous posts, and now that streams carry agent-to-agent messages, an unauthenticated text channel is an injection risk. If the user asks for browser error capture, explain this and do not wire the relay; it returns once ingest has write-only tokens and reserved message types.
 
 ## Raising issues to another repo's agent
 
