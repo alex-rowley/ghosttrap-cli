@@ -48,6 +48,7 @@ If you want to manually flag a caught exception or a non-exception condition, ca
 | `ghosttrap show <i>` | Full details for row `i` from the last `list` (1-based). Doesn't move the cursor. |
 | `ghosttrap raise "summary"` | Post an issue into a repo's stream — report body (markdown) from stdin |
 | `ghosttrap reply "summary"` | Answer a prior raise (deliverable ready, blocked, question) — body from stdin |
+| `ghosttrap jslogs [n]` | List quarantined browser JS events — stored, never streamed, untrusted |
 | `ghosttrap clear` | Skip all outstanding errors |
 | `ghosttrap nuke` | Permanently delete every server-side row for the current repo (errors + token). Requires typed confirmation. |
 
