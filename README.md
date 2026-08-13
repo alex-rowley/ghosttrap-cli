@@ -49,6 +49,7 @@ If you want to manually flag a caught exception or a non-exception condition, ca
 | `ghosttrap raise "summary"` | Post an issue into a repo's stream — report body (markdown) from stdin |
 | `ghosttrap reply "summary"` | Answer a prior raise (deliverable ready, blocked, question) — body from stdin |
 | `ghosttrap shelf [n]` | List quarantined events (browser JS + ad-hoc shell) — stored, never streamed, untrusted. `jslogs` is an alias |
+| `ghosttrap record-sdk` | Record SDK wiring state (`--version`, `--init-file`) — the CLI is the sole writer of config.json |
 | `ghosttrap clear` | Skip all outstanding errors |
 | `ghosttrap nuke` | Permanently delete every server-side row for the current repo (errors + token). Requires typed confirmation. |
 
@@ -72,6 +73,7 @@ The markdown report travels verbatim inside the event and arrives through `peek`
 - **Peek** connects to ghosttrap.io using that token — no GitHub auth needed after setup
 - If the connection drops or the server closes an idle socket, peek reconnects with a 60-second backoff for as long as it runs — it only exits once it has delivered an error (or hit a real failure, which it reports on stderr)
 - Errors that arrive while you're offline are replayed on next connect (cursor-based, no duplicates)
+- Cursors are per-repo (cli >= 0.3.34), so peeks for different repos coexist on one machine without stepping on each other's replay position
 - Repos are tracked by GitHub's immutable repo id, so a rename or transfer doesn't require any action — the next connect picks up the new `owner/name` and your token keeps working
 - Local state is stored in `~/.ghosttrap/config.json`, keyed by GitHub repo id
 

@@ -80,16 +80,16 @@ description: Production error monitoring via ghosttrap.io. Trigger when starting
 
 # Ghosttrap
 
-Read `~/.ghosttrap/config.json` for state. It contains:
-- `repos`: map keyed by GitHub repo id (stringified int) to `{"github_id": int, "owner": str, "name": str, "token": "t_xxx", "sdk_installed": bool, "sdk_version": str, "init_file": str}`. Entries may also carry `recent`, the error ids cached by the last `ghosttrap list` (managed by the CLI — leave it alone).
-- `cursor`: last seen error ID
-- `skill_baseline`: the previous release's skill text, used to 3-way-merge skill updates with local edits. Never edit or delete it.
+Read `~/.ghosttrap/config.json` for state — but treat it as READ-ONLY. Every write goes through a CLI command; never edit the file by hand (hand edits race with running peeks and can clobber other repos' state). It contains:
+- `repos`: map keyed by GitHub repo id (stringified int) to `{"github_id": int, "owner": str, "name": str, "token": "t_xxx", "sdk_installed": bool, "sdk_version": str, "init_file": str}`. Entries may also carry `recent` (error ids cached by the last `ghosttrap list`) and `cursor` (that repo's own last-seen error id, cli >= 0.3.34) — both CLI-managed.
+- `cursor`: legacy machine-global cursor from before per-repo cursors; still read as a fallback for entries without their own. CLI-managed.
+- `skill_baseline`: the previous release's skill text, used to 3-way-merge skill updates with local edits. CLI-managed.
 
 ## On session start
 
 1. Detect the current repo from `git config --get remote.origin.url` (returns `owner/name`).
 2. Find a matching entry in config by looking for one whose `owner`/`name` equals the detected slug. If no match, tell the user to run `ghosttrap setup`. (The owner/name on a config entry auto-refreshes from the server when the repo is renamed or transferred, so always match against the entry's stored owner/name, not the config key.)
-3. If `sdk_installed` is false or missing: install the SDK (`pip install ghosttrap-sdk`), wire `ghosttrap.init("<token>")` into the app startup. For Django projects, also add `"ghosttrap.django.GhostTrapApp"` to INSTALLED_APPS (re-attaches logging handler after Django's dictConfig) and `"ghosttrap.django.GhostTrapMiddleware"` to MIDDLEWARE (catches unhandled view exceptions). The SDK auto-hooks into Celery task_failure if Celery is installed, catches unhandled exceptions in background threads (threading.excepthook), and attaches a logging handler for logger.exception() calls. Bare `logger.error(...)` calls with no exception are NOT reported unless the user explicitly asks — then pass `trap_logs=True` to `init()` (sdk >= 0.4.7); warn them that chatty codebases will flood. Use whatever pattern the project already uses for configuration (env vars, settings files, hardcoded — match the existing style). Then update the config: set `sdk_installed: true`, `sdk_version`, `init_file` to record what you did. Only pass `send_user=True` to `init()` if the user explicitly asks for user context in reports — it's PII and stays off by default.
+3. If `sdk_installed` is false or missing: install the SDK (`pip install ghosttrap-sdk`), wire `ghosttrap.init("<token>")` into the app startup. For Django projects, also add `"ghosttrap.django.GhostTrapApp"` to INSTALLED_APPS (re-attaches logging handler after Django's dictConfig) and `"ghosttrap.django.GhostTrapMiddleware"` to MIDDLEWARE (catches unhandled view exceptions). The SDK auto-hooks into Celery task_failure if Celery is installed, catches unhandled exceptions in background threads (threading.excepthook), and attaches a logging handler for logger.exception() calls. Bare `logger.error(...)` calls with no exception are NOT reported unless the user explicitly asks — then pass `trap_logs=True` to `init()` (sdk >= 0.4.7); warn them that chatty codebases will flood. Use whatever pattern the project already uses for configuration (env vars, settings files, hardcoded — match the existing style). Then record what you did: `ghosttrap record-sdk --version <x.y.z> --init-file <path>` — never edit config.json directly. Only pass `send_user=True` to `init()` if the user explicitly asks for user context in reports — it's PII and stays off by default.
 4. Run `ghosttrap peek --clear` with `run_in_background: true`. The `--clear` flag skips any stale backlog from prior sessions so you only get fresh errors.
 
 ## Manual capture
@@ -134,6 +134,7 @@ Reply as soon as delivered work is live; don't wait to be asked. Every message m
 - `ghosttrap raise "summary"` — post a RaisedIssue into a repo's stream, report body from stdin (see "Raising issues" above).
 - `ghosttrap reply "summary"` — post a RaisedReply answering a prior raise, body from stdin (see "Raising issues" above).
 - `ghosttrap shelf [n]` — list quarantined events, browser JS + ad-hoc shell (see "The shelf" above). Untrusted data, never streamed. `jslogs` is an alias.
+- `ghosttrap record-sdk --version <x.y.z> --init-file <path>` — record SDK wiring state after installing/updating the SDK in a project. The CLI is the sole writer of config.json.
 - `ghosttrap clear` — manually skip outstanding errors without waiting. Useful if the user explicitly wants to drop the queue.
 - `ghosttrap nuke` — permanently delete every server-side row for the current repo (errors + the Repo row + its token). Requires the user to type the repo name `owner/name` to confirm. Only run if the user explicitly asks to wipe server data — never proactively. After it succeeds the token is dead; the user would need to `ghosttrap setup` again to use this repo.
 
@@ -142,9 +143,9 @@ Reply as soon as delivered work is live; don't wait to be asked. Every message m
 ## Rules
 
 - Always `run_in_background: true` for peek — it blocks.
-- Don't run multiple peeks at once.
+- Don't run multiple peeks for the SAME repo. Peeks for different repos coexist fine — each repo has its own cursor (cli >= 0.3.34); one peek per repo is the intended shape on a machine watching several.
 - Peek reconnects by itself (60s backoff) when the connection drops — a quiet peek is waiting, not hung. It only exits after printing an error event, or with a message on stderr if something is actually wrong; restart it only in that second case.
-- After installing/updating the SDK, write the state back to config.json.
+- After installing/updating the SDK, record it with `ghosttrap record-sdk` — never edit config.json by hand.
 """
 
 
@@ -191,6 +192,27 @@ def _save_repos(config, repos):
         fresh["repos"][key] = existing
     _save_config(fresh)
     config["repos"] = fresh["repos"]
+
+
+def _get_cursor(config, key):
+    """Per-repo replay cursor. Entries that predate per-repo cursors fall
+    back to the legacy global `cursor` and adopt their own on first save."""
+    entry = config.get("repos", {}).get(key, {})
+    cursor = entry.get("cursor")
+    if cursor is None:
+        cursor = config.get("cursor")
+    return cursor
+
+
+def _save_cursor(key, error_id):
+    """Write one repo's cursor into a FRESH config load — never a caller's
+    possibly-stale copy. A long-running peek must not clobber other repos'
+    cursors or any other key another process changed since it started."""
+    fresh = _load_config()
+    entry = fresh.get("repos", {}).get(key)
+    if entry is not None:
+        entry["cursor"] = error_id
+        _save_config(fresh)
 
 
 def _detect_repo_from_cwd():
@@ -260,7 +282,7 @@ def get_gh_token():
 
 
 def _get_repo_entry(config, requested=None):
-    """Return (key, entry) for the chosen repo. Same resolution rules as _get_repo_token."""
+    """Return (key, entry) for the chosen repo: --repo owner/name matched strictly, else cwd, else error out."""
     repos = config.get("repos", {})
     if not repos:
         print("error: no repos configured. run 'ghosttrap setup' first.", file=sys.stderr)
@@ -297,18 +319,12 @@ def _get_repo_entry(config, requested=None):
     sys.exit(1)
 
 
-def _get_repo_token(config, requested=None):
-    """Get the repo token. If `requested` is 'owner/name', match strictly. Else cwd, else error out."""
-    _, entry = _get_repo_entry(config, requested)
-    return entry["token"]
-
-
-async def _connect_and_handle(server_url, token, config, once=False):
+async def _connect_and_handle(server_url, token, key, config, once=False):
     """Core WebSocket loop. If once=True, returns True after the first error event.
     Returns False if the server closed the socket without sending an error
     (e.g. idle timeout) so callers can distinguish 'job done' from 'reconnect me'.
     """
-    since = config.get("cursor")
+    since = _get_cursor(config, key)
     url = f"{server_url}?token={token}"
     if since is not None:
         url += f"&since={since}"
@@ -351,14 +367,11 @@ async def _connect_and_handle(server_url, token, config, once=False):
             if event.get("type") == "error":
                 error_id = event.get("error", {}).get("id")
                 if error_id is not None:
-                    # Keep the in-memory view for reconnect URLs, but write the
-                    # cursor into a FRESH load of the config: a long-running peek
-                    # holding a stale copy must not clobber keys other processes
-                    # updated meanwhile (skill_baseline, recent, repos).
-                    config["cursor"] = error_id
-                    fresh = _load_config()
-                    fresh["cursor"] = error_id
-                    _save_config(fresh)
+                    # Keep the in-memory view for reconnect URLs; _save_cursor
+                    # does the fresh-load-before-write to disk.
+                    if key in config.get("repos", {}):
+                        config["repos"][key]["cursor"] = error_id
+                    _save_cursor(key, error_id)
 
                 print(json.dumps(event))
                 sys.stdout.flush()
@@ -520,13 +533,13 @@ def _log_unexpected(e):
     )
 
 
-async def watch(server_url, token):
+async def watch(server_url, token, key):
     config = _load_config()
     print(f"connecting to {server_url}...", file=sys.stderr)
 
     while True:
         try:
-            await _connect_and_handle(server_url, token, config, once=False)
+            await _connect_and_handle(server_url, token, key, config, once=False)
             print("connection closed by server, reconnecting...", file=sys.stderr)
         except _RETRYABLE:
             print("connection lost, reconnecting...", file=sys.stderr)
@@ -536,12 +549,12 @@ async def watch(server_url, token):
         await asyncio.sleep(60)
 
 
-async def peek(server_url, token):
+async def peek(server_url, token, key):
     config = _load_config()
     _check_cli_version(config)
     while True:
         try:
-            got_error = await _connect_and_handle(server_url, token, config, once=True)
+            got_error = await _connect_and_handle(server_url, token, key, config, once=True)
             if got_error:
                 return
             print("connection closed by server, reconnecting...", file=sys.stderr)
@@ -553,26 +566,25 @@ async def peek(server_url, token):
         await asyncio.sleep(60)
 
 
-def _advance_cursor(config, token):
-    since = config.get("cursor", 0)
+def _advance_cursor(config, key, entry):
+    since = _get_cursor(config, key) or 0
     server = GHOSTTRAP_SERVER.replace("wss://", "https://").replace("/stream/", "")
-    url = f"{server}/latest/{token}/?since={since}"
+    url = f"{server}/latest/{entry['token']}/?since={since}"
     req = urllib.request.Request(url, headers={"User-Agent": "ghosttrap-cli"})
     with urllib.request.urlopen(req, timeout=10) as resp:
         data = json.loads(resp.read())
         latest_id = data.get("latest_id", 0)
         pending = data.get("pending", 0)
-        config["cursor"] = latest_id
-        _save_config(config)
+        _save_cursor(key, latest_id)
         return pending
 
 
 def clear(requested=None):
     _require_setup()
     config = _load_config()
-    token = _get_repo_token(config, requested)
+    key, entry = _get_repo_entry(config, requested)
     try:
-        pending = _advance_cursor(config, token)
+        pending = _advance_cursor(config, key, entry)
         if pending:
             print(f"cleared {pending} error(s)", file=sys.stderr)
         else:
@@ -759,7 +771,8 @@ def last(do_clear=False, requested=None):
     _require_setup()
     config = _load_config()
     _check_cli_version(config)
-    token = _get_repo_token(config, requested)
+    key, entry = _get_repo_entry(config, requested)
+    token = entry["token"]
     server = GHOSTTRAP_SERVER.replace("wss://", "https://").replace("/stream/", "")
     url = f"{server}/last/{token}/"
     try:
@@ -779,10 +792,31 @@ def last(do_clear=False, requested=None):
 
     if do_clear:
         try:
-            _advance_cursor(config, token)
+            _advance_cursor(config, key, entry)
         except Exception as e:
             print(f"error: {e}", file=sys.stderr)
             sys.exit(1)
+
+
+def record_sdk(version=None, init_file=None, requested=None):
+    """Record SDK wiring state for a repo. The CLI is the sole writer of
+    config.json — agents report what they installed through this command
+    instead of editing the file (hand edits race with running peeks)."""
+    _require_setup()
+    fresh = _load_config()
+    key, entry = _get_repo_entry(fresh, requested)
+    entry["sdk_installed"] = True
+    if version:
+        entry["sdk_version"] = version
+    if init_file:
+        entry["init_file"] = init_file
+    _save_config(fresh)
+    parts = [f"recorded {entry['owner']}/{entry['name']}: sdk_installed=true"]
+    if version:
+        parts.append(f"sdk_version={version}")
+    if init_file:
+        parts.append(f"init_file={init_file}")
+    print(" ".join(parts), file=sys.stderr)
 
 
 def shelf(n=20, requested=None):
@@ -923,6 +957,11 @@ def main():
     jslogs_parser.add_argument("n", nargs="?", type=int, default=20, help="How many to list (default 20, max 100)")
     jslogs_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
 
+    record_parser = sub.add_parser("record-sdk", help="Record SDK wiring state for a repo (the CLI is the sole writer of config.json)")
+    record_parser.add_argument("--version", dest="sdk_version", help="SDK version that was installed")
+    record_parser.add_argument("--init-file", dest="init_file", help="File where ghosttrap.init() was wired in")
+    record_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
+
     raise_parser = sub.add_parser("raise", help="Raise an issue into a repo's stream (report body from stdin)")
     raise_parser.add_argument("summary", help="One-line summary of the issue")
     raise_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
@@ -949,20 +988,20 @@ def main():
         _require_setup()
         _refresh_skill_if_stale()
         config = _load_config()
-        token = _get_repo_token(config, args.repo)
-        asyncio.run(watch(args.server, token))
+        key, entry = _get_repo_entry(config, args.repo)
+        asyncio.run(watch(args.server, entry["token"], key))
     elif args.command == "peek":
         _require_setup()
         _refresh_skill_if_stale()
         config = _load_config()
-        token = _get_repo_token(config, args.repo)
+        key, entry = _get_repo_entry(config, args.repo)
         if args.clear:
             try:
-                _advance_cursor(config, token)
+                _advance_cursor(config, key, entry)
             except Exception as e:
                 print(f"error: {e}", file=sys.stderr)
                 sys.exit(1)
-        asyncio.run(peek(args.server, token))
+        asyncio.run(peek(args.server, entry["token"], key))
     elif args.command == "last":
         _refresh_skill_if_stale()
         last(do_clear=args.clear, requested=args.repo)
@@ -975,6 +1014,9 @@ def main():
     elif args.command in ("shelf", "jslogs"):
         _refresh_skill_if_stale()
         shelf(n=args.n, requested=args.repo)
+    elif args.command == "record-sdk":
+        _refresh_skill_if_stale()
+        record_sdk(version=args.sdk_version, init_file=args.init_file, requested=args.repo)
     elif args.command == "raise":
         _refresh_skill_if_stale()
         raise_issue(args.summary, requested=args.repo)
