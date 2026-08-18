@@ -150,16 +150,32 @@ Reply as soon as delivered work is live; don't wait to be asked. Every message m
 
 
 def _load_config():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE) as f:
-            return json.load(f)
-    return {"repos": {}}
+    if not os.path.exists(CONFIG_FILE):
+        return {"repos": {}}
+    for attempt in range(3):
+        try:
+            with open(CONFIG_FILE) as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            # A concurrent writer on a pre-0.3.35 CLI truncates before it
+            # rewrites, exposing an empty/partial file. Atomic replace can't
+            # produce this, but tolerate neighbors running older versions.
+            time.sleep(0.05 * (attempt + 1))
+    with open(CONFIG_FILE) as f:
+        return json.load(f)
 
 
 def _save_config(config):
+    # Atomic replace: concurrent readers see the old file or the new file,
+    # never a truncated one. Multiple peeks save cursors on the same
+    # reconnect tick, so plain open("w") raced other processes' loads.
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
+    tmp = f"{CONFIG_FILE}.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
         json.dump(config, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, CONFIG_FILE)
 
 
 def _repo_key(r):
