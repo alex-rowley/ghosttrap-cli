@@ -892,6 +892,22 @@ def raise_issue(summary, requested=None, reply=False):
 
     body = ""
     if not sys.stdin.isatty():
+        # A non-tty stdin that no writer ever closes would block read()
+        # forever, hanging the command silently before any output. Give the
+        # body 10s to start arriving, then fail loudly with the fix.
+        try:
+            import select
+            ready, _, _ = select.select([sys.stdin], [], [], 10.0)
+        except (ImportError, OSError, ValueError):
+            ready = [sys.stdin]
+        if not ready:
+            print(
+                "error: stdin is open but no report body arrived within 10s. "
+                "Pipe the body (ghosttrap raise \"summary\" < report.md) or "
+                "close stdin (< /dev/null) to send a summary-only event.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         body = sys.stdin.read()
 
     origin = _detect_repo_from_cwd()
