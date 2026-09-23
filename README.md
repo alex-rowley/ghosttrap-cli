@@ -43,6 +43,7 @@ If you want to manually flag a caught exception or a non-exception condition, ca
 | `ghosttrap peek --clear` | Skip outstanding errors, then wait for the next one |
 | `ghosttrap last` | Fetch the most recent error and exit (no waiting) |
 | `ghosttrap last --clear` | Fetch the most recent error and skip everything older |
+| `ghosttrap consume [n]` | Dump every outstanding error (everything past the cursor) as full JSON, oldest first, and advance the cursor past them. `n` takes only the oldest `n`. |
 | `ghosttrap watch` | Deprecated — `peek` reconnects until an error arrives, which covers the streaming case |
 | `ghosttrap list [n]` | Print a numbered summary of the most recent `n` errors (default 10, max 50). Doesn't move the cursor. |
 | `ghosttrap show <i>` | Full details for row `i` from the last `list` (1-based). Doesn't move the cursor. |

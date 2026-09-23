@@ -129,6 +129,7 @@ Reply as soon as delivered work is live; don't wait to be asked. Every message m
 ## Other commands
 
 - `ghosttrap last` — fetch the single most recent error and exit immediately, no waiting. Useful when the user wants to look at the latest error without blocking on a peek. Add `--clear` to also skip everything older in one shot.
+- `ghosttrap consume [n]` — dump every outstanding error (everything past the cursor) as full JSON events, oldest first, one per line, then advance the cursor past exactly what was printed. Exits immediately, no waiting. Use it to read a backlog instead of dropping it with `clear`; pass `n` to take only the oldest `n` and leave the rest outstanding. Same event shape as peek, so handle each line as in "When peek returns" (RaisedIssue/RaisedReply included).
 - `ghosttrap list [n]` — print a numbered summary of the most recent `n` errors (default 10, max 50). Does not move the cursor. Caches the ordered ids in config so a follow-up `ghosttrap show <i>` returns full details for that row.
 - `ghosttrap show <i>` — full details for the i-th row from the most recent `ghosttrap list`. Does not move the cursor.
 - `ghosttrap raise "summary"` — post a RaisedIssue into a repo's stream, report body from stdin (see "Raising issues" above).
@@ -817,6 +818,55 @@ def last(do_clear=False, requested=None):
             sys.exit(1)
 
 
+def consume(limit=None, requested=None):
+    """Dump every outstanding error (everything past the cursor), oldest
+    first, one JSON event per line — then leave the cursor just past the last
+    one printed. The cursor is saved per page, after the flush, so an
+    interrupted run never skips an error it didn't print."""
+    _require_setup()
+    config = _load_config()
+    _check_cli_version(config)
+    key, entry = _get_repo_entry(config, requested)
+    token = entry["token"]
+    server = GHOSTTRAP_SERVER.replace("wss://", "https://").replace("/stream/", "")
+    since = _get_cursor(config, key) or 0
+    count = 0
+    remaining = 0
+    while limit is None or count < limit:
+        n = 100 if limit is None else min(100, limit - count)
+        url = f"{server}/pending/{token}/?since={since}&n={n}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "ghosttrap-cli"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+        except Exception as e:
+            print(f"error: {e}", file=sys.stderr)
+            if count:
+                print(f"consumed {count} error(s) before failing; cursor is just past them.", file=sys.stderr)
+            sys.exit(1)
+
+        errors = data.get("errors", [])
+        if not errors:
+            remaining = 0
+            break
+        for error in errors:
+            print(json.dumps({"type": "error", "error": error}))
+        sys.stdout.flush()
+        since = errors[-1]["id"]
+        _save_cursor(key, since)
+        count += len(errors)
+        remaining = data.get("remaining", 0)
+        if not remaining:
+            break
+
+    if not count:
+        print("nothing to consume", file=sys.stderr)
+    elif remaining:
+        print(f"consumed {count} error(s), {remaining} still outstanding. cursor advanced.", file=sys.stderr)
+    else:
+        print(f"consumed {count} error(s). cursor advanced.", file=sys.stderr)
+
+
 def record_sdk(version=None, init_file=None, requested=None):
     """Record SDK wiring state for a repo. The CLI is the sole writer of
     config.json — agents report what they installed through this command
@@ -976,6 +1026,10 @@ def main():
     last_parser.add_argument("--clear", action="store_true", help="Also skip remaining outstanding errors")
     last_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
 
+    consume_parser = sub.add_parser("consume", help="Dump every outstanding error (full details) and advance the cursor past them")
+    consume_parser.add_argument("n", nargs="?", type=int, default=None, help="Stop after this many, oldest first (default: all)")
+    consume_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
+
     list_parser = sub.add_parser("list", help="List the most recent N errors (summary only, cursor unchanged)")
     list_parser.add_argument("n", nargs="?", type=int, default=10, help="How many to list (default 10, max 50)")
     list_parser.add_argument("--repo", help="Target repo as owner/name (overrides cwd detection)")
@@ -1040,6 +1094,12 @@ def main():
     elif args.command == "last":
         _refresh_skill_if_stale()
         last(do_clear=args.clear, requested=args.repo)
+    elif args.command == "consume":
+        _refresh_skill_if_stale()
+        if args.n is not None and args.n < 1:
+            print("error: n must be at least 1.", file=sys.stderr)
+            sys.exit(1)
+        consume(limit=args.n, requested=args.repo)
     elif args.command == "list":
         _refresh_skill_if_stale()
         list_recent(n=args.n, requested=args.repo)
