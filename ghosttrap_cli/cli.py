@@ -340,7 +340,10 @@ async def _connect_and_handle(server_url, token, key, config, once=False):
     Returns False if the server closed the socket without sending an error
     (e.g. idle timeout) so callers can distinguish 'job done' from 'reconnect me'.
     """
-    since = _get_cursor(config, key)
+    # Fresh load, not the caller's long-lived copy: consume/clear in another
+    # process may have moved this repo's cursor since we started, and a
+    # reconnect on the stale value would replay errors already handled.
+    since = _get_cursor(_load_config(), key)
     url = f"{server_url}?token={token}"
     if since is not None:
         url += f"&since={since}"
